@@ -170,6 +170,35 @@ If Django is required for organisational reasons, the strategy engine, indicator
 Binance client modules are pure Python — drop them into a Django app unchanged and wrap
 the routers as DRF views.
 
+## Deploy to Railway (or any Docker host)
+
+The repo includes a multi-stage [Dockerfile](Dockerfile) that builds the React frontend
+and bundles it into the FastAPI image, so a single container serves everything.
+
+### Railway (easiest — 2 minutes)
+
+1. Sign in at <https://railway.app> with your GitHub account.
+2. Click **"New Project"** → **"Deploy from GitHub repo"**.
+3. Select **`sumit221292/bbc`** (authorize Railway to access the repo if prompted).
+4. Railway auto-detects the [Dockerfile](Dockerfile) and starts the build (~3 minutes).
+5. After deploy, click **Settings → Networking → Generate Domain** to get a public URL.
+6. Open the URL — the dashboard is live.
+
+No env vars needed. The Binance API used is public (no API key required).
+
+### Self-host (Docker)
+
+```bash
+docker build -t btc-dashboard .
+docker run -p 8000:8000 btc-dashboard
+# Open http://localhost:8000
+```
+
+### Fly.io / Render / any container host
+
+Same Dockerfile works. Configure the host to expose port `$PORT` (or 8000) and forward
+HTTPS. WebSocket support must be enabled (Binance live stream uses `/ws/klines`).
+
 ## Disclaimer
 
 This is an educational/analytical tool. Signals are not financial advice. The strategies
