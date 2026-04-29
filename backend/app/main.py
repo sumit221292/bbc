@@ -35,6 +35,12 @@ app.include_router(strategy.router)
 app.include_router(outlook.router)
 
 
+@app.get("/healthz")
+def healthz():
+    """Health check for Railway / load balancers. Cheap, no Binance call."""
+    return {"status": "ok"}
+
+
 @app.websocket("/ws/klines")
 async def ws_klines(websocket: WebSocket):
     """Live kline stream proxied from Binance.
