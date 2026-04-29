@@ -1,0 +1,261 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Chart from './components/Chart.jsx'
+import StrategySelector from './components/StrategySelector.jsx'
+import Toolbar from './components/Toolbar.jsx'
+import SignalPanel from './components/SignalPanel.jsx'
+import MarketOutlook from './components/MarketOutlook.jsx'
+import StrategyOverview from './components/StrategyOverview.jsx'
+import Leaderboard from './components/Leaderboard.jsx'
+import Resizer from './components/Resizer.jsx'
+import { getIndicators, getKlines, getLeaderboard, getOutlook, getStrategies, getStrategySnapshot, runStrategy } from './api.js'
+import { useLiveKlines } from './hooks/useLiveKlines.js'
+import { usePersistedState } from './hooks/usePersistedState.js'
+
+export default function App() {
+  const chartRef = useRef(null)
+
+  // These three persist across page refreshes via localStorage.
+  const [symbol, setSymbol] = usePersistedState('btc.symbol', 'BTCUSDT')
+  const [interval, setInterval] = usePersistedState('btc.interval', '1h')
+
+  const [strategies, setStrategies] = useState([])
+  const [strategyId, setStrategyId] = usePersistedState('btc.strategy', 'mtf_chop_aware')
+  const [strategyResult, setStrategyResult] = useState(null)
+  const [outlook, setOutlook] = useState(null)
+  const [snapshot, setSnapshot] = useState(null)
+  const [leaderboard, setLeaderboard] = useState(null)
+  const [activeTab, setActiveTab] = usePersistedState('btc.tab', 'live')
+  const [sidebarWidth, setSidebarWidth] = usePersistedState('btc.sidebarWidth', 380)
+
+  const [drawMode, setDrawMode] = useState('none')
+  const [error, setError] = useState(null)
+
+  // Strategy list — fetched once.
+  useEffect(() => {
+    getStrategies().then(setStrategies).catch(e => setError(String(e)))
+  }, [])
+
+  // MTF strategies are computed on 1h candles. If the user picks one while
+  // the chart is on a different TF, switch the chart to 1h so the markers
+  // line up. Otherwise the markers would be filtered out (correct) but the
+  // user wouldn't see them and might think the strategy isn't firing.
+  useEffect(() => {
+    if (strategyId.startsWith('mtf_') && !['1h', '4h', '1d'].includes(interval)) {
+      setInterval('1h')
+    }
+    // intentionally not depending on `interval` — only react to strategy switches
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategyId])
+
+  // Whenever symbol/interval changes: load history + indicators.
+  useEffect(() => {
+    let cancelled = false
+    // Clear stale visuals immediately — markers/levels from the previous
+    // (symbol, interval) would otherwise sit on the chart until the new
+    // strategy run completes a moment later.
+    chartRef.current?.setMarkers([])
+    chartRef.current?.setLevels({})
+    setStrategyResult(null)
+    ;(async () => {
+      try {
+        setError(null)
+        const [candles, ind] = await Promise.all([
+          getKlines({ symbol, interval, limit: 500 }),
+          getIndicators({ symbol, interval, limit: 500 }),
+        ])
+        if (cancelled) return
+        chartRef.current?.setCandles(candles)
+        chartRef.current?.setVolume(candles)
+        chartRef.current?.setEmas(ind)
+      } catch (e) {
+        if (!cancelled) setError(String(e))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [symbol, interval])
+
+  // Strategy run — refetch on strategy/symbol/interval change AND every 30s.
+  useEffect(() => {
+    if (!strategyId) return
+    let cancelled = false
+    const fetchOnce = async () => {
+      try {
+        const r = await runStrategy({ id: strategyId, symbol, interval, limit: 500 })
+        if (cancelled) return
+        setStrategyResult(r)
+        chartRef.current?.setMarkers(r.signals)
+        chartRef.current?.setLevels({
+          entry: r.latest?.entry,
+          stop: r.latest?.stop_loss,
+          target: r.latest?.target,
+        })
+      } catch (e) {
+        if (!cancelled) setError(String(e))
+      }
+    }
+    fetchOnce()
+    const id = window.setInterval(fetchOnce, 30000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [strategyId, symbol, interval])
+
+  // Outlook — fetch on symbol change and refresh every 5 min.
+  useEffect(() => {
+    let cancelled = false
+    setOutlook(null)
+    const fetchOnce = async () => {
+      try {
+        const o = await getOutlook(symbol)
+        if (!cancelled) setOutlook(o)
+      } catch (e) {
+        if (!cancelled) setError(String(e))
+      }
+    }
+    fetchOnce()
+    const id = window.setInterval(fetchOnce, 5 * 60 * 1000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [symbol])
+
+  // Strategy snapshot — all strategies' live state, refreshed every 60s.
+  useEffect(() => {
+    let cancelled = false
+    setSnapshot(null)
+    const fetchOnce = async () => {
+      try {
+        const s = await getStrategySnapshot(symbol)
+        if (!cancelled) setSnapshot(s)
+      } catch (e) {
+        if (!cancelled) setError(String(e))
+      }
+    }
+    fetchOnce()
+    const id = window.setInterval(fetchOnce, 60 * 1000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [symbol])
+
+  // Leaderboard — heavier (~5s), so only fetch when the Best tab is open.
+  // Refresh every 5 minutes while the tab stays open.
+  useEffect(() => {
+    if (activeTab !== 'best') return
+    let cancelled = false
+    const fetchOnce = async () => {
+      try {
+        const lb = await getLeaderboard(symbol)
+        if (!cancelled) setLeaderboard(lb)
+      } catch (e) {
+        if (!cancelled) setError(String(e))
+      }
+    }
+    fetchOnce()
+    const id = window.setInterval(fetchOnce, 5 * 60 * 1000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [symbol, activeTab])
+
+  // Live updates from the backend WS bridge.
+  const live = useLiveKlines({ symbol, interval })
+  useEffect(() => {
+    if (live) chartRef.current?.updateCandle(live)
+  }, [live])
+
+  // Drawing mode -> chart
+  useEffect(() => {
+    chartRef.current?.setDrawingMode(drawMode)
+  }, [drawMode])
+
+  const onClearDrawings = useCallback(() => {
+    chartRef.current?.clearDrawings()
+  }, [])
+
+  // When user clicks a strategy in the overview, auto-switch to the Live tab
+  // so they immediately see its trade card / performance.
+  const handleStrategySelect = useCallback((id) => {
+    setStrategyId(id)
+    setActiveTab('live')
+  }, [setStrategyId, setActiveTab])
+
+  const livePrice = useMemo(() => live?.close ?? null, [live])
+
+  const tabs = [
+    { id: 'live', icon: '📊', label: 'Live' },
+    { id: 'plan', icon: '📋', label: 'Plan' },
+    { id: 'all',  icon: '🎯', label: 'All' },
+    { id: 'best', icon: '🏆', label: 'Best' },
+  ]
+
+  return (
+    <div className="app">
+      <header className="header">
+        <div className="brand">
+          <span className="logo">₿</span>
+          <div className="brand-text">
+            <div className="brand-title">Crypto Trading Dashboard</div>
+            <div className="brand-sub">Real-time signals + multi-timeframe analysis</div>
+          </div>
+        </div>
+        <div className="live-price-wrap">
+          <div className="live-price-label">Live Price</div>
+          <div className="live-price">
+            {livePrice ? `$${Number(livePrice).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}
+          </div>
+        </div>
+      </header>
+
+      <Toolbar
+        symbol={symbol} onSymbolChange={setSymbol}
+        interval={interval} onIntervalChange={setInterval}
+        drawMode={drawMode} onDrawModeChange={setDrawMode}
+        onClearDrawings={onClearDrawings}
+      />
+
+      <StrategySelector
+        strategies={strategies}
+        selected={strategyId}
+        onSelect={setStrategyId}
+      />
+
+      {error && <div className="error">{error}</div>}
+
+      <main
+        className="main"
+        style={{ gridTemplateColumns: `1fr 6px ${sidebarWidth}px` }}
+      >
+        <section className="chart-pane">
+          <Chart ref={chartRef} />
+        </section>
+        <Resizer current={sidebarWidth} onResize={setSidebarWidth} />
+        <aside className="side-pane">
+          <div className="tabs">
+            {tabs.map(t => (
+              <button
+                key={t.id}
+                className={`tab ${activeTab === t.id ? 'active' : ''}`}
+                onClick={() => setActiveTab(t.id)}
+              >
+                <span className="tab-icon">{t.icon}</span>
+                <span className="tab-label">{t.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="tab-content">
+            {activeTab === 'live' && (
+              <SignalPanel result={strategyResult} livePrice={livePrice} />
+            )}
+            {activeTab === 'plan' && (
+              <MarketOutlook data={outlook} livePrice={livePrice} />
+            )}
+            {activeTab === 'all' && (
+              <StrategyOverview
+                data={snapshot}
+                selectedId={strategyId}
+                onSelect={handleStrategySelect}
+              />
+            )}
+            {activeTab === 'best' && (
+              <Leaderboard data={leaderboard} />
+            )}
+          </div>
+        </aside>
+      </main>
+    </div>
+  )
+}

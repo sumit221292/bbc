@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Editors
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code state
+.claude/
+
+# Env / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS
+Thumbs.db

@@ -1,0 +1,303 @@
+import asyncio
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+
+from ..backtest import simulate
+from ..binance import fetch_klines
+from ..multi_tf import MTFContext
+from ..schemas import Signal, StrategyMeta, StrategyResult, StrategySummary
+from ..strategies import get_strategy, is_mtf, list_mtf_metas, list_strategies, run_mtf
+from ..trade_status import annotate, summarize
+
+router = APIRouter(prefix="/api/strategy", tags=["strategy"])
+
+
+@router.get("/list", response_model=list[StrategyMeta])
+def get_strategy_list():
+    # MTF strategies first so they show up at the top of the UI selector.
+    return list_mtf_metas() + [s.meta() for s in list_strategies()]
+
+
+def _build_result(strategy_id: str, symbol: str, interval: str,
+                  candles, signals: list[Signal]) -> StrategyResult:
+    """Shared post-processing: annotate trade status, pick latest, build summary."""
+    signals = annotate(signals, candles)
+    last_candle = candles[-1]
+
+    # Live card priority:
+    #   1. If there's any OPEN trade, show it (regardless of how old).
+    #      Stop and target are still active until hit, so the trade IS live.
+    #   2. Otherwise, show HOLD with no levels.
+    open_trades = [s for s in signals if s.status == "OPEN"]
+    if open_trades:
+        latest = open_trades[-1]
+    else:
+        latest = Signal(
+            time=last_candle.time, type="HOLD", price=last_candle.close,
+            reason="Koi active trade nahi -- next signal ka wait karo",
+        )
+
+    return StrategyResult(
+        strategy=strategy_id, symbol=symbol.upper(), interval=interval,
+        signals=signals, latest=latest,
+        summary=StrategySummary(**summarize(signals)),
+    )
+
+
+class StrategySnapshot(BaseModel):
+    id: str
+    name: str
+    category: str
+    signal: str             # 'BUY' | 'SELL' | 'HOLD'
+    status: Optional[str]   # 'OPEN' | 'WIN' | 'LOSS' | None
+    entry: Optional[float]
+    stop_loss: Optional[float]
+    target: Optional[float]
+    pnl_pct: Optional[float]   # live mark-to-market for OPEN, realized for closed
+    win_rate: float
+    total_pnl_pct: float
+    total_trades: int
+    last_signal_time: Optional[int]
+
+
+class SnapshotResponse(BaseModel):
+    symbol: str
+    interval: str
+    generated_at: int
+    strategies: list[StrategySnapshot]
+
+
+# Map strategy id -> category (matches the frontend dropdown groups).
+_CATEGORIES: dict[str, str] = {
+    "mtf_chop_aware": "Recommended (Multi-TF)",
+    "mtf_strict": "Recommended (Multi-TF)",
+    "mtf_2screen": "Recommended (Multi-TF)",
+    "mtf_chop_only": "Recommended (Multi-TF)",
+    "best": "Selective",
+    "trend_following": "Trend",
+    "day_trading": "Trend",
+    "adx_trend": "Trend",
+    "macd": "Trend",
+    "supertrend": "Trend",
+    "ichimoku": "Trend",
+    "bollinger": "Mean Reversion",
+    "stochastic": "Mean Reversion",
+    "swing": "Mean Reversion",
+    "scalping": "Mean Reversion",
+    "breakout": "Breakout",
+    "donchian": "Breakout",
+}
+
+
+def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> StrategySnapshot:
+    """Pick latest open trade (or HOLD), compute summary, package as snapshot row."""
+    last_close = candles[-1].close
+    open_trades = [s for s in signals if s.status == "OPEN"]
+    if open_trades:
+        latest = open_trades[-1]
+        signal_type = latest.type
+        status = latest.status
+        entry, stop, target = latest.entry, latest.stop_loss, latest.target
+        # Live mark-to-market PnL for OPEN trade
+        if entry:
+            if signal_type == "BUY":
+                pnl_live = (last_close - entry) / entry * 100.0
+            else:
+                pnl_live = (entry - last_close) / entry * 100.0
+        else:
+            pnl_live = None
+        last_time = latest.time
+    else:
+        signal_type = "HOLD"
+        status = None
+        entry = stop = target = pnl_live = None
+        last_time = signals[-1].time if signals else None
+    s = summarize(signals)
+    return StrategySnapshot(
+        id=sid, name=name,
+        category=_CATEGORIES.get(sid, "Other"),
+        signal=signal_type, status=status,
+        entry=entry, stop_loss=stop, target=target,
+        pnl_pct=pnl_live,
+        win_rate=s["win_rate"],
+        total_pnl_pct=s["total_pnl_pct"],
+        total_trades=s["total"],
+        last_signal_time=last_time,
+    )
+
+
+@router.get("/snapshot", response_model=SnapshotResponse)
+async def get_snapshot(symbol: str = Query("BTCUSDT")):
+    """Returns the current state of every registered strategy in one call.
+
+    All strategies are computed on 1h candles for fair comparison.
+    MTF strategies use the additional 4h/1d context.
+    """
+    try:
+        c1h, c4h, c1d = await asyncio.gather(
+            fetch_klines(symbol, "1h", 1000),
+            fetch_klines(symbol, "4h", 1000),
+            fetch_klines(symbol, "1d", 1000),
+        )
+    except Exception as e:
+        raise HTTPException(502, f"Binance error: {e}")
+
+    ctx = MTFContext(candles_1h=c1h, candles_4h=c4h, candles_1d=c1d)
+    rows: list[StrategySnapshot] = []
+
+    # MTF strategies first
+    for meta in list_mtf_metas():
+        signals = annotate(run_mtf(meta.id, ctx, start_idx=50), c1h)
+        rows.append(_build_snapshot(meta.id, meta.name, signals, c1h))
+
+    # Single-TF strategies on 1h
+    for cls in list_strategies():
+        signals = annotate(cls().evaluate(c1h), c1h)
+        rows.append(_build_snapshot(cls.id, cls.name, signals, c1h))
+
+    return SnapshotResponse(
+        symbol=symbol.upper(), interval="1h",
+        generated_at=c1h[-1].time, strategies=rows,
+    )
+
+
+class LeaderboardEntry(BaseModel):
+    strategy_id: str
+    strategy_name: str
+    timeframe: str
+    trades: int
+    wins: int
+    losses: int
+    open: int
+    win_rate: float
+    total_pnl_pct: float
+
+
+class WindowLeaderboard(BaseModel):
+    window_hours: int
+    top: list[LeaderboardEntry]
+    any_traded: bool
+
+
+class LeaderboardResponse(BaseModel):
+    symbol: str
+    generated_at: int
+    leaderboards: list[WindowLeaderboard]
+
+
+# Timeframes worth scanning for the leaderboard. 1m would need >1000 bars to
+# cover 24h so we exclude it; 5m / 15m / 1h cover all useful windows.
+_LB_TIMEFRAMES: list[tuple[str, int]] = [
+    ("5m", 600),    # 250 warmup + 288 = 538, plus a small buffer
+    ("15m", 400),   # 250 warmup + 96 = 346
+    ("1h", 500),    # comfortable for MTF + single-TF
+]
+_LB_WINDOWS_HOURS: list[int] = [1, 2, 4, 6, 12, 24]
+
+
+@router.get("/leaderboard", response_model=LeaderboardResponse)
+async def get_leaderboard(symbol: str = Query("BTCUSDT")):
+    """For each rolling window (1h-24h), return the top 3 (strategy, timeframe)
+    combos by realized PnL with $1000 capital and 2% risk per trade."""
+    try:
+        # Fetch all single-TF data in parallel.
+        candle_jobs = {tf: fetch_klines(symbol, tf, n) for tf, n in _LB_TIMEFRAMES}
+        # Plus 4h and 1d (for MTF).
+        candle_jobs["4h"] = fetch_klines(symbol, "4h", 1000)
+        candle_jobs["1d"] = fetch_klines(symbol, "1d", 1000)
+        candle_lists = await asyncio.gather(*candle_jobs.values())
+        candles = dict(zip(candle_jobs.keys(), candle_lists))
+    except Exception as e:
+        raise HTTPException(502, f"Binance error: {e}")
+
+    ctx = MTFContext(candles_1h=candles["1h"], candles_4h=candles["4h"], candles_1d=candles["1d"])
+
+    # Build name lookup for both single-TF and MTF strategies.
+    name_for: dict[str, str] = {cls.id: cls.name for cls in list_strategies()}
+    for meta in list_mtf_metas():
+        name_for[meta.id] = meta.name
+
+    # Pre-compute signals for every (strategy, timeframe) combo we care about.
+    signal_cache: dict[tuple[str, str], list[Signal]] = {}
+    for tf, _ in _LB_TIMEFRAMES:
+        tf_candles = candles[tf]
+        for cls in list_strategies():
+            signals = annotate(cls().evaluate(tf_candles), tf_candles)
+            signal_cache[(cls.id, tf)] = signals
+    # MTF only on 1h (their entry timeframe).
+    for meta in list_mtf_metas():
+        signals = annotate(run_mtf(meta.id, ctx, start_idx=50), candles["1h"])
+        signal_cache[(meta.id, "1h")] = signals
+
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    leaderboards: list[WindowLeaderboard] = []
+
+    for hours in _LB_WINDOWS_HOURS:
+        cutoff = now_ts - hours * 3600
+        scored: list[LeaderboardEntry] = []
+        for (sid, tf), signals in signal_cache.items():
+            tf_candles = candles[tf]
+            # First candle index whose start time is >= cutoff.
+            start_idx = next(
+                (i for i, c in enumerate(tf_candles) if c.time >= cutoff),
+                len(tf_candles),
+            )
+            if start_idx >= len(tf_candles):
+                continue
+            r = simulate(tf_candles, signals, start_idx)
+            if r["count"] == 0:
+                continue
+            scored.append(LeaderboardEntry(
+                strategy_id=sid,
+                strategy_name=name_for.get(sid, sid),
+                timeframe=tf,
+                trades=r["count"],
+                wins=r["wins"],
+                losses=r["losses"],
+                open=r["open"],
+                win_rate=r["win_rate"],
+                total_pnl_pct=r["total_pnl_pct"],
+            ))
+        scored.sort(key=lambda e: e.total_pnl_pct, reverse=True)
+        leaderboards.append(WindowLeaderboard(
+            window_hours=hours, top=scored[:3], any_traded=len(scored) > 0,
+        ))
+
+    return LeaderboardResponse(
+        symbol=symbol.upper(), generated_at=now_ts, leaderboards=leaderboards,
+    )
+
+
+@router.get("/run", response_model=StrategyResult)
+async def run_strategy(
+    id: str = Query(..., description="Strategy id, e.g. 'best' or 'mtf_chop_aware'"),
+    symbol: str = Query("BTCUSDT"),
+    interval: str = Query("1m"),
+    limit: int = Query(500, ge=50, le=1000),
+):
+    # ---- Multi-TF strategies: fetch 3 timeframes, ignore the `interval` param ----
+    if is_mtf(id):
+        try:
+            c1h, c4h, c1d = await asyncio.gather(
+                fetch_klines(symbol, "1h", 1000),
+                fetch_klines(symbol, "4h", 1000),
+                fetch_klines(symbol, "1d", 1000),
+            )
+        except Exception as e:
+            raise HTTPException(502, f"Binance error: {e}")
+        ctx = MTFContext(candles_1h=c1h, candles_4h=c4h, candles_1d=c1d)
+        signals = run_mtf(id, ctx, start_idx=50)
+        # MTF always reports its results on the 1h timeframe (the entry TF).
+        return _build_result(id, symbol, "1h", c1h, signals)
+
+    # ---- Standard single-TF strategies ----
+    try:
+        strat = get_strategy(id)
+    except KeyError:
+        raise HTTPException(404, f"Unknown strategy '{id}'")
+    candles = await fetch_klines(symbol, interval, limit)
+    signals = strat.evaluate(candles)
+    return _build_result(id, symbol, interval, candles, signals)
