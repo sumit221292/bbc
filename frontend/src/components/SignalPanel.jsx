@@ -25,11 +25,11 @@ function actionLabel(type) {
 
 /** Compute potential profit% (if target hits) and loss% (if stop hits)
  *  as price-move percentages, signed naturally for the trade direction. */
-function tradeOutcomes(latest) {
-  if (!latest?.entry || !latest?.stop_loss || !latest?.target) return null
-  const sign = latest.type === 'BUY' ? 1 : -1
-  const profitPct = (sign * (latest.target - latest.entry) / latest.entry) * 100
-  const lossPct = (sign * (latest.stop_loss - latest.entry) / latest.entry) * 100
+function tradeOutcomes(t) {
+  if (!t?.entry || !t?.stop_loss || !t?.target) return null
+  const sign = t.type === 'BUY' ? 1 : -1
+  const profitPct = (sign * (t.target - t.entry) / t.entry) * 100
+  const lossPct = (sign * (t.stop_loss - t.entry) / t.entry) * 100
   const rr = Math.abs(profitPct / lossPct)
   return { profitPct, lossPct, rr }
 }
@@ -43,75 +43,117 @@ function timeAgo(ts) {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
+/** A single trade card. Used both for HOLD (the only-active-card case) and
+ *  each individual OPEN trade (when multiple are active simultaneously). */
+function TradeCard({ trade, livePrice, index }) {
+  const tone = trade.type === 'BUY' ? 'buy' : trade.type === 'SELL' ? 'sell' : 'hold'
+
+  let livePnl = trade.pnl_pct
+  if (trade.status === 'OPEN' && trade.entry && livePrice) {
+    livePnl = trade.type === 'BUY'
+      ? (livePrice - trade.entry) / trade.entry * 100
+      : (trade.entry - livePrice) / trade.entry * 100
+  }
+
+  const outcomes = tradeOutcomes(trade)
+
+  return (
+    <div className={`signal-card ${tone}`}>
+      <div className="row">
+        <span className="label">
+          {index != null ? `Trade #${index + 1}` : 'Abhi Ka Price'}
+        </span>
+        <span className="big">${fmt(livePrice ?? trade.price)}</span>
+      </div>
+      <div className="row">
+        <span className={`badge ${tone}`}>{actionLabel(trade.type)}</span>
+        <StatusBadge status={trade.status} />
+        {livePnl != null && (
+          <span className={`pnl ${livePnl >= 0 ? 'pos' : 'neg'}`}>{pct(livePnl)}</span>
+        )}
+      </div>
+      {trade.status === 'OPEN' && trade.time && (
+        <div className="muted small">Trade opened {timeAgo(trade.time)}</div>
+      )}
+      <div className="reason">{trade.reason}</div>
+
+      {outcomes && (
+        <div className="rr-strip">
+          <span className="rr-badge">RR 1 : {outcomes.rr.toFixed(2)}</span>
+          <span className="rr-text">
+            <span className="pos">{pct(outcomes.profitPct)}</span>
+            <span className="muted"> profit</span>
+            <span className="muted"> / </span>
+            <span className="neg">{pct(outcomes.lossPct)}</span>
+            <span className="muted"> loss</span>
+          </span>
+        </div>
+      )}
+
+      <div className="grid">
+        <div>
+          <div className="k">Entry</div>
+          <div className="v">${fmt(trade.entry)}</div>
+        </div>
+        <div>
+          <div className="k">Stop-Loss</div>
+          <div className="v stop">${fmt(trade.stop_loss)}</div>
+          {outcomes && <div className="sub neg">{pct(outcomes.lossPct)} loss</div>}
+        </div>
+        <div>
+          <div className="k">Target</div>
+          <div className="v target">${fmt(trade.target)}</div>
+          {outcomes && <div className="sub pos">{pct(outcomes.profitPct)} profit</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SignalPanel({ result, livePrice }) {
   if (!result) return <div className="signal-panel"><div className="muted">Loading…</div></div>
   const { latest, signals, summary } = result
-  const tone = latest.type === 'BUY' ? 'buy' : latest.type === 'SELL' ? 'sell' : 'hold'
 
-  let livePnl = latest.pnl_pct
-  if (latest.status === 'OPEN' && latest.entry && livePrice) {
-    livePnl = latest.type === 'BUY'
-      ? (livePrice - latest.entry) / latest.entry * 100
-      : (latest.entry - livePrice) / latest.entry * 100
+  // Find ALL currently-open trades. There can be more than one when several
+  // signals fire while no prior trade has resolved yet (the simulator takes
+  // them one at a time, but the analytical view shows every unresolved setup).
+  const openTrades = signals.filter(s => s.status === 'OPEN')
+
+  // Aggregate live mark-to-market PnL across all open trades.
+  let combinedLivePnl = null
+  if (openTrades.length > 0 && livePrice) {
+    const total = openTrades.reduce((acc, t) => {
+      if (!t.entry) return acc
+      const pnl = t.type === 'BUY'
+        ? (livePrice - t.entry) / t.entry * 100
+        : (t.entry - livePrice) / t.entry * 100
+      return acc + pnl
+    }, 0)
+    combinedLivePnl = total / openTrades.length  // average per trade
   }
-
-  const outcomes = tradeOutcomes(latest)
 
   return (
     <div className="signal-panel">
-      <div className="panel-section-title">🤖 Strategy Ka Live Signal</div>
-
-      <div className={`signal-card ${tone}`}>
-        <div className="row">
-          <span className="label">Abhi Ka Price</span>
-          <span className="big">${fmt(livePrice ?? latest.price)}</span>
-        </div>
-        <div className="row">
-          <span className={`badge ${tone}`}>{actionLabel(latest.type)}</span>
-          <StatusBadge status={latest.status} />
-          {livePnl != null && (
-            <span className={`pnl ${livePnl >= 0 ? 'pos' : 'neg'}`}>{pct(livePnl)}</span>
-          )}
-        </div>
-        {latest.status === 'OPEN' && latest.time && (
-          <div className="muted small">Trade opened {timeAgo(latest.time)}</div>
+      <div className="panel-section-title">
+        🤖 Strategy Ka Live Signal
+        {openTrades.length > 1 && (
+          <span className="active-count">
+            {openTrades.length} active · avg {pct(combinedLivePnl)}
+          </span>
         )}
-        <div className="reason">{latest.reason}</div>
-
-        {outcomes && (
-          <div className="rr-strip">
-            <span className="rr-badge">RR 1 : {outcomes.rr.toFixed(2)}</span>
-            <span className="rr-text">
-              <span className="pos">{pct(outcomes.profitPct)}</span>
-              <span className="muted"> profit</span>
-              <span className="muted"> / </span>
-              <span className="neg">{pct(outcomes.lossPct)}</span>
-              <span className="muted"> loss</span>
-            </span>
-          </div>
-        )}
-
-        <div className="grid">
-          <div>
-            <div className="k">Entry</div>
-            <div className="v">${fmt(latest.entry)}</div>
-          </div>
-          <div>
-            <div className="k">Stop-Loss</div>
-            <div className="v stop">${fmt(latest.stop_loss)}</div>
-            {outcomes && (
-              <div className="sub neg">{pct(outcomes.lossPct)} loss</div>
-            )}
-          </div>
-          <div>
-            <div className="k">Target</div>
-            <div className="v target">${fmt(latest.target)}</div>
-            {outcomes && (
-              <div className="sub pos">{pct(outcomes.profitPct)} profit</div>
-            )}
-          </div>
-        </div>
       </div>
+
+      {openTrades.length === 0
+        ? <TradeCard trade={latest} livePrice={livePrice} />
+        : openTrades.map((t, i) => (
+            <TradeCard
+              key={`${t.time}-${t.type}`}
+              trade={t}
+              livePrice={livePrice}
+              index={openTrades.length > 1 ? i : null}
+            />
+          ))
+      }
 
       {summary && (
         <div className="summary">

@@ -186,12 +186,20 @@ body {
   font-size: 13px; font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--text); margin-bottom: 8px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.active-count {
+  font-size: 10px; font-weight: 600;
+  padding: 3px 8px; border-radius: 10px;
+  background: rgba(52,152,219,0.18); color: var(--accent);
+  text-transform: none; letter-spacing: 0;
 }
 
 .signal-card {
   border: 1px solid var(--border); border-radius: 8px;
   padding: 12px; background: var(--panel-2);
 }
+.signal-card + .signal-card { margin-top: 8px; }
 .signal-card.buy { border-color: rgba(38,166,154,0.5); }
 .signal-card.sell { border-color: rgba(239,83,80,0.5); }
 .signal-card .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
