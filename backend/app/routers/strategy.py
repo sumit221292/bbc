@@ -42,15 +42,19 @@ def _build_result(strategy_id: str, symbol: str, interval: str,
             reason="Koi active trade nahi -- next signal ka wait karo",
         )
 
+    # Counts from the per-signal annotated view so the numbers match the
+    # 'Recent Trades' log the user sees. Total P&L from the realistic
+    # simulator (one trade at a time, $1000 capital, 2% risk, fees).
+    counts = summarize(signals)
     sim = simulate(candles, signals)
-    closed = sim["wins"] + sim["losses"]
+    closed = counts["wins"] + counts["losses"]
     summary = StrategySummary(
-        total=sim["count"],
-        closed=closed,
-        wins=sim["wins"],
-        losses=sim["losses"],
-        open=sim["open"],
-        win_rate=sim["win_rate"],
+        total=counts["total"],
+        closed=counts["closed"],
+        wins=counts["wins"],
+        losses=counts["losses"],
+        open=counts["open"],
+        win_rate=counts["win_rate"],
         total_pnl_pct=sim["total_pnl_pct"],
         avg_pnl_pct=(sim["total_pnl_pct"] / closed) if closed else 0.0,
     )
@@ -133,6 +137,7 @@ def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> Stra
         entry = stop = target = pnl_live = None
         last_time = signals[-1].time if signals else None
 
+    counts = summarize(signals)
     sim = simulate(candles, signals)
     return StrategySnapshot(
         id=sid, name=name,
@@ -140,9 +145,9 @@ def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> Stra
         signal=signal_type, status=status,
         entry=entry, stop_loss=stop, target=target,
         pnl_pct=pnl_live,
-        win_rate=sim["win_rate"],
-        total_pnl_pct=sim["total_pnl_pct"],
-        total_trades=sim["count"],
+        win_rate=counts["win_rate"],          # per-signal hit rate
+        total_pnl_pct=sim["total_pnl_pct"],   # realistic capital P&L
+        total_trades=counts["total"],         # count visible in trade log
         last_signal_time=last_time,
     )
 
