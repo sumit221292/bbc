@@ -23,14 +23,16 @@ def get_strategy_list():
 
 def _build_result(strategy_id: str, symbol: str, interval: str,
                   candles, signals: list[Signal]) -> StrategyResult:
-    """Shared post-processing: annotate trade status, pick latest, build summary."""
+    """Shared post-processing: annotate trade status, pick latest, build summary.
+
+    Summary uses the proper trade simulator (one trade at a time, 2% risk per
+    trade on a $1000 starting capital, compounded, with 0.2% round-trip fees)
+    so the P&L number reflects what would actually happen if you took these
+    signals — not the misleading sum of individual trade price moves.
+    """
     signals = annotate(signals, candles)
     last_candle = candles[-1]
 
-    # Live card priority:
-    #   1. If there's any OPEN trade, show it (regardless of how old).
-    #      Stop and target are still active until hit, so the trade IS live.
-    #   2. Otherwise, show HOLD with no levels.
     open_trades = [s for s in signals if s.status == "OPEN"]
     if open_trades:
         latest = open_trades[-1]
@@ -40,10 +42,22 @@ def _build_result(strategy_id: str, symbol: str, interval: str,
             reason="Koi active trade nahi -- next signal ka wait karo",
         )
 
+    sim = simulate(candles, signals)
+    closed = sim["wins"] + sim["losses"]
+    summary = StrategySummary(
+        total=sim["count"],
+        closed=closed,
+        wins=sim["wins"],
+        losses=sim["losses"],
+        open=sim["open"],
+        win_rate=sim["win_rate"],
+        total_pnl_pct=sim["total_pnl_pct"],
+        avg_pnl_pct=(sim["total_pnl_pct"] / closed) if closed else 0.0,
+    )
+
     return StrategyResult(
         strategy=strategy_id, symbol=symbol.upper(), interval=interval,
-        signals=signals, latest=latest,
-        summary=StrategySummary(**summarize(signals)),
+        signals=signals, latest=latest, summary=summary,
     )
 
 
@@ -93,7 +107,11 @@ _CATEGORIES: dict[str, str] = {
 
 
 def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> StrategySnapshot:
-    """Pick latest open trade (or HOLD), compute summary, package as snapshot row."""
+    """Pick latest open trade (or HOLD), compute summary, package as snapshot row.
+
+    Stats use the realistic trade simulator (2% risk per trade, $1000 base,
+    compounded, fees included) — not the naive sum of price moves.
+    """
     last_close = candles[-1].close
     open_trades = [s for s in signals if s.status == "OPEN"]
     if open_trades:
@@ -101,7 +119,6 @@ def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> Stra
         signal_type = latest.type
         status = latest.status
         entry, stop, target = latest.entry, latest.stop_loss, latest.target
-        # Live mark-to-market PnL for OPEN trade
         if entry:
             if signal_type == "BUY":
                 pnl_live = (last_close - entry) / entry * 100.0
@@ -115,16 +132,17 @@ def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> Stra
         status = None
         entry = stop = target = pnl_live = None
         last_time = signals[-1].time if signals else None
-    s = summarize(signals)
+
+    sim = simulate(candles, signals)
     return StrategySnapshot(
         id=sid, name=name,
         category=_CATEGORIES.get(sid, "Other"),
         signal=signal_type, status=status,
         entry=entry, stop_loss=stop, target=target,
         pnl_pct=pnl_live,
-        win_rate=s["win_rate"],
-        total_pnl_pct=s["total_pnl_pct"],
-        total_trades=s["total"],
+        win_rate=sim["win_rate"],
+        total_pnl_pct=sim["total_pnl_pct"],
+        total_trades=sim["count"],
         last_signal_time=last_time,
     )
 
