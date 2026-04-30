@@ -23,6 +23,17 @@ function actionLabel(type) {
   return 'WAIT (Ruko)'
 }
 
+/** Compute potential profit% (if target hits) and loss% (if stop hits)
+ *  as price-move percentages, signed naturally for the trade direction. */
+function tradeOutcomes(latest) {
+  if (!latest?.entry || !latest?.stop_loss || !latest?.target) return null
+  const sign = latest.type === 'BUY' ? 1 : -1
+  const profitPct = (sign * (latest.target - latest.entry) / latest.entry) * 100
+  const lossPct = (sign * (latest.stop_loss - latest.entry) / latest.entry) * 100
+  const rr = Math.abs(profitPct / lossPct)
+  return { profitPct, lossPct, rr }
+}
+
 function timeAgo(ts) {
   if (!ts) return ''
   const diff = Math.floor(Date.now() / 1000 - ts)
@@ -44,6 +55,8 @@ function SignalPanel({ result, livePrice }) {
       : (latest.entry - livePrice) / latest.entry * 100
   }
 
+  const outcomes = tradeOutcomes(latest)
+
   return (
     <div className="signal-panel">
       <div className="panel-section-title">🤖 Strategy Ka Live Signal</div>
@@ -64,10 +77,39 @@ function SignalPanel({ result, livePrice }) {
           <div className="muted small">Trade opened {timeAgo(latest.time)}</div>
         )}
         <div className="reason">{latest.reason}</div>
+
+        {outcomes && (
+          <div className="rr-strip">
+            <span className="rr-badge">RR 1 : {outcomes.rr.toFixed(2)}</span>
+            <span className="rr-text">
+              <span className="pos">{pct(outcomes.profitPct)}</span>
+              <span className="muted"> profit</span>
+              <span className="muted"> / </span>
+              <span className="neg">{pct(outcomes.lossPct)}</span>
+              <span className="muted"> loss</span>
+            </span>
+          </div>
+        )}
+
         <div className="grid">
-          <div><div className="k">Entry</div><div className="v">${fmt(latest.entry)}</div></div>
-          <div><div className="k">Stop-Loss</div><div className="v stop">${fmt(latest.stop_loss)}</div></div>
-          <div><div className="k">Target</div><div className="v target">${fmt(latest.target)}</div></div>
+          <div>
+            <div className="k">Entry</div>
+            <div className="v">${fmt(latest.entry)}</div>
+          </div>
+          <div>
+            <div className="k">Stop-Loss</div>
+            <div className="v stop">${fmt(latest.stop_loss)}</div>
+            {outcomes && (
+              <div className="sub neg">{pct(outcomes.lossPct)} loss</div>
+            )}
+          </div>
+          <div>
+            <div className="k">Target</div>
+            <div className="v target">${fmt(latest.target)}</div>
+            {outcomes && (
+              <div className="sub pos">{pct(outcomes.profitPct)} profit</div>
+            )}
+          </div>
         </div>
       </div>
 
