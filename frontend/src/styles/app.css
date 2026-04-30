@@ -182,6 +182,23 @@ body {
 .tab-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .tab-content::-webkit-scrollbar-thumb:hover { background: #3a3f4d; }
 
+.strategy-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; margin-bottom: 12px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(52,152,219,0.18) 0%, rgba(52,152,219,0.06) 100%);
+  border-left: 3px solid var(--accent);
+}
+.strategy-banner-label {
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.08em; color: var(--accent);
+  flex-shrink: 0;
+}
+.strategy-banner-name {
+  font-size: 14px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 .panel-section-title {
   font-size: 13px; font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.06em;

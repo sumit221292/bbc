@@ -110,9 +110,11 @@ function TradeCard({ trade, livePrice, index }) {
   )
 }
 
-function SignalPanel({ result, livePrice }) {
+function SignalPanel({ result, livePrice, strategies = [] }) {
   if (!result) return <div className="signal-panel"><div className="muted">Loading…</div></div>
-  const { latest, signals, summary } = result
+  const { latest, signals, summary, strategy: strategyId } = result
+  const strategyMeta = strategies.find(s => s.id === strategyId)
+  const strategyName = strategyMeta?.name || strategyId || ''
 
   // Find ALL currently-open trades. There can be more than one when several
   // signals fire while no prior trade has resolved yet (the simulator takes
@@ -134,11 +136,16 @@ function SignalPanel({ result, livePrice }) {
 
   return (
     <div className="signal-panel">
+      <div className="strategy-banner">
+        <span className="strategy-banner-label">🤖 STRATEGY</span>
+        <span className="strategy-banner-name">{strategyName}</span>
+      </div>
+
       <div className="panel-section-title">
-        🤖 Strategy Ka Live Signal
-        {openTrades.length > 1 && (
+        Live Trade Signals
+        {openTrades.length > 0 && (
           <span className="active-count">
-            {openTrades.length} active · avg {pct(combinedLivePnl)}
+            {openTrades.length} active · avg {pct(combinedLivePnl ?? 0)}
           </span>
         )}
       </div>
@@ -171,7 +178,7 @@ function SignalPanel({ result, livePrice }) {
       )}
 
       <div className="history">
-        <div className="title">📜 Recent Trades (last 15)</div>
+        <div className="title">📜 Recent Trades from {strategyName} (last 15)</div>
         <ul>
           {signals.slice(-15).reverse().map(s => (
             <li key={`${s.time}-${s.type}`}>

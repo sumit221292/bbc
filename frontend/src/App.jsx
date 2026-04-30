@@ -238,7 +238,11 @@ export default function App() {
 
           <div className="tab-content">
             {activeTab === 'live' && (
-              <SignalPanel result={strategyResult} livePrice={livePrice} />
+              <SignalPanel
+                result={strategyResult}
+                livePrice={livePrice}
+                strategies={strategies}
+              />
             )}
             {activeTab === 'plan' && (
               <MarketOutlook data={outlook} livePrice={livePrice} />
