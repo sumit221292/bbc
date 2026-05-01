@@ -35,13 +35,15 @@ export default function App() {
     getStrategies().then(setStrategies).catch(e => setError(String(e)))
   }, [])
 
-  // MTF strategies are computed on 1h candles. If the user picks one while
-  // the chart is on a different TF, switch the chart to 1h so the markers
-  // line up. Otherwise the markers would be filtered out (correct) but the
-  // user wouldn't see them and might think the strategy isn't firing.
+  // Auto-switch chart timeframe when the user picks a strategy that's
+  // designed for a specific TF, otherwise the markers won't line up.
+  //   - MTF_* runs on 1h candles
+  //   - smc_momentum is tuned for 5m/15m (400-pt momentum filter)
   useEffect(() => {
     if (strategyId.startsWith('mtf_') && !['1h', '4h', '1d'].includes(interval)) {
       setInterval('1h')
+    } else if (strategyId === 'smc_momentum' && !['5m', '15m'].includes(interval)) {
+      setInterval('15m')
     }
     // intentionally not depending on `interval` — only react to strategy switches
     // eslint-disable-next-line react-hooks/exhaustive-deps

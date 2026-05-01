@@ -11,6 +11,10 @@ const CATEGORIES = [
     ids: ['best'],
   },
   {
+    label: '🧠 Smart Money (ICT/SMC concepts — 5m/15m)',
+    ids: ['smc_momentum'],
+  },
+  {
     label: '📈 Trend Following (jab trend strong ho)',
     ids: ['trend_following', 'day_trading', 'adx_trend', 'macd', 'supertrend', 'ichimoku'],
   },

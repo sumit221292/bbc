@@ -95,6 +95,7 @@ _CATEGORIES: dict[str, str] = {
     "mtf_2screen": "Recommended (Multi-TF)",
     "mtf_chop_only": "Recommended (Multi-TF)",
     "best": "Selective",
+    "smc_momentum": "Smart Money",
     "trend_following": "Trend",
     "day_trading": "Trend",
     "adx_trend": "Trend",

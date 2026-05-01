@@ -17,12 +17,13 @@ from .donchian_turtle import DonchianTurtle
 from .ichimoku_cross import IchimokuCross
 from .stochastic_rev import StochasticReversal
 from .adx_trend import ADXTrend
+from .smc_momentum import SMCMomentum
 
 
 # 'best' is intentionally first so the UI defaults to it.
 _STRATEGIES: dict[str, type[Strategy]] = {
     cls.id: cls for cls in (
-        BestTrade,
+        BestTrade, SMCMomentum,
         ScalpingRSI, DayTradingEMACross, SwingSRBounce, TrendFollowing, Breakout,
         MACDCross, BollingerReversion, SuperTrendFlip, DonchianTurtle,
         IchimokuCross, StochasticReversal, ADXTrend,
