@@ -139,6 +139,8 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;       /* allow grid track to constrain width */
+  overflow: hidden;   /* clip stray-overflow content */
 }
 .tabs {
   display: flex;
@@ -188,6 +190,8 @@ body {
   border-radius: 8px;
   background: linear-gradient(135deg, rgba(52,152,219,0.18) 0%, rgba(52,152,219,0.06) 100%);
   border-left: 3px solid var(--accent);
+  min-width: 0;       /* allow flex items to shrink */
+  max-width: 100%;
 }
 .strategy-banner-label {
   font-size: 10px; font-weight: 700;
@@ -197,6 +201,8 @@ body {
 .strategy-banner-name {
   font-size: 14px; font-weight: 700; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;       /* required for ellipsis to actually trigger inside flex */
+  flex: 1 1 auto;
 }
 
 .panel-section-title {

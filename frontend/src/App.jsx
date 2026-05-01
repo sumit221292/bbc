@@ -221,7 +221,7 @@ export default function App() {
 
       <main
         className="main"
-        style={{ gridTemplateColumns: `1fr 6px ${sidebarWidth}px` }}
+        style={{ gridTemplateColumns: `minmax(0, 1fr) 6px ${sidebarWidth || 380}px` }}
       >
         <section className="chart-pane">
           <Chart ref={chartRef} />
