@@ -348,7 +348,29 @@ body {
 }
 .alerts-test:disabled { opacity: 0.5; cursor: not-allowed; }
 .alerts-test:hover:not(:disabled) { opacity: 0.85; }
-.alerts-status { font-size: 11px; }
+.alerts-test.secondary { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+.alerts-test.secondary:hover:not(:disabled) { background: var(--border); opacity: 1; }
+.alerts-status { font-size: 11px; padding: 4px 0; }
+
+.alerts-detected {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 4px;
+}
+.alerts-detected-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; text-align: left;
+  font-family: inherit; color: var(--text);
+}
+.alerts-detected-row:hover {
+  background: rgba(52,152,219,0.12); border-color: var(--accent);
+}
+.alerts-detected-row code {
+  background: var(--panel); padding: 3px 8px; border-radius: 3px;
+  font-family: ui-monospace, monospace; font-size: 12px; font-weight: 600;
+  color: var(--accent);
+}
 
 .alerts-subs {
   background: var(--panel-2); border: 1px solid var(--border);

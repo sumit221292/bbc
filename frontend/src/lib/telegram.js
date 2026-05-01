@@ -1,3 +1,37 @@
+/** Fetch the most recent chats that have messaged the bot. Used by the
+ *  Alerts tab to auto-detect the user's chat ID without needing
+ *  @userinfobot. The user just sends any message to their bot, then
+ *  clicks "Auto-detect Chat ID".
+ *  Returns { ok, chats: [{ id, name, username, type }], description }.
+ */
+export async function getTelegramUpdates(token) {
+  try {
+    const url = `https://api.telegram.org/bot${token}/getUpdates`
+    const res = await fetch(url)
+    const data = await res.json()
+    if (!data.ok) {
+      return { ok: false, chats: [], description: data.description || 'unknown' }
+    }
+    const seen = new Map()
+    for (const u of data.result || []) {
+      const msg = u.message || u.edited_message || u.channel_post || {}
+      const chat = msg.chat || {}
+      if (chat.id != null && !seen.has(chat.id)) {
+        seen.set(chat.id, {
+          id: chat.id,
+          name: [chat.first_name, chat.last_name].filter(Boolean).join(' ') || chat.title || '',
+          username: chat.username || '',
+          type: chat.type || '',
+        })
+      }
+    }
+    return { ok: true, chats: Array.from(seen.values()), description: '' }
+  } catch (e) {
+    return { ok: false, chats: [], description: String(e) }
+  }
+}
+
+
 /** Send a message to a Telegram chat directly from the browser.
  *  Telegram's Bot API allows CORS so no backend proxy is needed.
  *  Returns { ok: boolean, description: string }.

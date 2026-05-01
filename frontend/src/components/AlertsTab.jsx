@@ -1,11 +1,13 @@
 import { memo, useState } from 'react'
-import { sendTelegram } from '../lib/telegram.js'
+import { getTelegramUpdates, sendTelegram } from '../lib/telegram.js'
 
 /** UI for setting up Telegram bot credentials and selecting which
  *  strategies should fire push notifications. */
 function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSubs }) {
   const [testStatus, setTestStatus] = useState('')
   const [testing, setTesting] = useState(false)
+  const [detectedChats, setDetectedChats] = useState([])
+  const [detectStatus, setDetectStatus] = useState('')
 
   const toggle = (id) => {
     if (subs.includes(id)) {
@@ -26,6 +28,29 @@ function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSu
     }
   }
   const subNone = () => setSubs([])
+
+  const detectChatId = async () => {
+    if (!token) {
+      setDetectStatus('❌ Pehle bot token paste karo.')
+      return
+    }
+    setDetectStatus('Checking…')
+    setDetectedChats([])
+    const res = await getTelegramUpdates(token)
+    if (!res.ok) {
+      setDetectStatus('❌ ' + res.description)
+      return
+    }
+    if (res.chats.length === 0) {
+      setDetectStatus(
+        '⚠️ No chats found. Pehle apne bot ko message karo: ' +
+        'Telegram pe @Msurebbtc_bot kholo, "Start" → kuch bhi bhejo, fir yahan re-click karo.'
+      )
+      return
+    }
+    setDetectedChats(res.chats)
+    setDetectStatus(`✅ ${res.chats.length} chat(s) found — click karke select karo:`)
+  }
 
   const sendTest = async () => {
     if (!token || !chatId) return
@@ -75,7 +100,15 @@ function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSu
             placeholder="123456789"
           />
         </label>
+
         <div className="alerts-actions">
+          <button
+            className="alerts-test secondary"
+            onClick={detectChatId}
+            disabled={!token}
+          >
+            🔍 Auto-detect Chat ID
+          </button>
           <button
             className="alerts-test"
             onClick={sendTest}
@@ -83,8 +116,26 @@ function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSu
           >
             {testing ? 'Sending…' : 'Send Test Message'}
           </button>
-          {testStatus && <span className="alerts-status">{testStatus}</span>}
         </div>
+        {detectStatus && <div className="alerts-status">{detectStatus}</div>}
+        {detectedChats.length > 0 && (
+          <div className="alerts-detected">
+            {detectedChats.map(chat => (
+              <button
+                key={chat.id}
+                type="button"
+                className="alerts-detected-row"
+                onClick={() => { setChatId(String(chat.id)); setDetectStatus('✅ Chat ID set.') }}
+              >
+                <code>{chat.id}</code>
+                <span className="muted">
+                  {chat.type}{chat.name && ` — ${chat.name}`}{chat.username && ` (@${chat.username})`}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        {testStatus && <div className="alerts-status">{testStatus}</div>}
       </div>
 
       <div className="alerts-subs">
