@@ -12,7 +12,7 @@ const CATEGORIES = [
   },
   {
     label: '🧠 Smart Money (ICT/SMC concepts — 5m/15m)',
-    ids: ['smc_momentum'],
+    ids: ['smc_mtf', 'smc_momentum'],
   },
   {
     label: '📈 Trend Following (jab trend strong ho)',

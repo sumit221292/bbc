@@ -9,7 +9,11 @@ from ..backtest import simulate
 from ..binance import fetch_klines
 from ..multi_tf import MTFContext
 from ..schemas import Signal, StrategyMeta, StrategyResult, StrategySummary
-from ..strategies import get_strategy, is_mtf, list_mtf_metas, list_strategies, run_mtf
+from ..smc_mtf import SMCMTFContext
+from ..strategies import (
+    get_strategy, is_mtf, is_smc_mtf, list_mtf_metas, list_strategies,
+    run_mtf, run_smc_mtf,
+)
 from ..trade_status import annotate, summarize
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
@@ -94,6 +98,7 @@ _CATEGORIES: dict[str, str] = {
     "mtf_strict": "Recommended (Multi-TF)",
     "mtf_2screen": "Recommended (Multi-TF)",
     "mtf_chop_only": "Recommended (Multi-TF)",
+    "smc_mtf": "Smart Money",
     "best": "Selective",
     "smc_momentum": "Smart Money",
     "trend_following": "Trend",
@@ -302,7 +307,21 @@ async def run_strategy(
     interval: str = Query("1m"),
     limit: int = Query(500, ge=50, le=1000),
 ):
-    # ---- Multi-TF strategies: fetch 3 timeframes, ignore the `interval` param ----
+    # ---- SMC Multi-TF: 5m execution + 15m structure + 1h trend ----
+    if is_smc_mtf(id):
+        try:
+            c5, c15, c1h = await asyncio.gather(
+                fetch_klines(symbol, "5m", 1000),
+                fetch_klines(symbol, "15m", 500),
+                fetch_klines(symbol, "1h", 300),
+            )
+        except Exception as e:
+            raise HTTPException(502, f"Binance error: {e}")
+        smc_ctx = SMCMTFContext(candles_5m=c5, candles_15m=c15, candles_1h=c1h)
+        signals = run_smc_mtf(id, smc_ctx, start_idx=60)
+        return _build_result(id, symbol, "5m", c5, signals)
+
+    # ---- Multi-TF strategies: 1h / 4h / 1d, ignore the `interval` param ----
     if is_mtf(id):
         try:
             c1h, c4h, c1d = await asyncio.gather(

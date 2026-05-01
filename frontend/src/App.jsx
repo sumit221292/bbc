@@ -37,11 +37,14 @@ export default function App() {
 
   // Auto-switch chart timeframe when the user picks a strategy that's
   // designed for a specific TF, otherwise the markers won't line up.
-  //   - MTF_* runs on 1h candles
-  //   - smc_momentum is tuned for 5m/15m (400-pt momentum filter)
+  //   - mtf_*       runs on 1h candles
+  //   - smc_mtf     runs on 5m candles (entry TF)
+  //   - smc_momentum is tuned for 5m / 15m
   useEffect(() => {
     if (strategyId.startsWith('mtf_') && !['1h', '4h', '1d'].includes(interval)) {
       setInterval('1h')
+    } else if (strategyId === 'smc_mtf' && interval !== '5m') {
+      setInterval('5m')
     } else if (strategyId === 'smc_momentum' && !['5m', '15m'].includes(interval)) {
       setInterval('15m')
     }

@@ -16,6 +16,7 @@ from ..multi_tf import (
     evaluate_strict,
     evaluate_2screen,
 )
+from ..smc_mtf import SMCMTFContext, evaluate_smc_mtf
 from ..schemas import Signal, StrategyMeta
 
 
@@ -47,7 +48,27 @@ _MTF_REGISTRY: dict[str, tuple[str, str, Callable[[MTFContext, int], list[Signal
         "Runs on 1h candles.",
         evaluate_chop_only,
     ),
+    # SMC MTF uses different timeframes (5m/15m/1h) and a different context
+    # type. The router dispatches it through a separate code path -- see
+    # is_smc_mtf() below.
+    "smc_mtf": (
+        "🧠 SMC MTF (5m + 15m + 1h)",
+        "Top-down ICT/SMC: 1h trend bias, 15m FVG/Order-Block zones, "
+        "5m entry trigger (400-pt impulse + RSI reversal or liquidity sweep). "
+        "Most selective SMC variant -- expect few but high-quality signals.",
+        evaluate_smc_mtf,  # signature differs (takes SMCMTFContext) -- handled by run_smc_mtf
+    ),
 }
+
+
+def is_smc_mtf(strategy_id: str) -> bool:
+    return strategy_id == "smc_mtf"
+
+
+def run_smc_mtf(strategy_id: str, ctx: SMCMTFContext, start_idx: int = 0) -> list[Signal]:
+    if strategy_id != "smc_mtf":
+        raise KeyError(strategy_id)
+    return evaluate_smc_mtf(ctx, start_idx)
 
 
 def list_mtf_metas() -> list[StrategyMeta]:
