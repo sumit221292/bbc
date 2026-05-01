@@ -32,8 +32,8 @@ export async function getOutlook(symbol = 'BTCUSDT') {
   return r.json()
 }
 
-export async function getStrategySnapshot(symbol = 'BTCUSDT') {
-  const r = await fetch(`${BASE}/api/strategy/snapshot?symbol=${symbol}`)
+export async function getStrategySnapshot(symbol = 'BTCUSDT', interval = '1h') {
+  const r = await fetch(`${BASE}/api/strategy/snapshot?symbol=${symbol}&interval=${interval}`)
   if (!r.ok) throw new Error(`snapshot: ${r.status}`)
   return r.json()
 }

@@ -127,13 +127,15 @@ export default function App() {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [symbol])
 
-  // Strategy snapshot — all strategies' live state, refreshed every 60s.
+  // Strategy snapshot — all strategies' live state at the user's current
+  // interval, refreshed every 60s. Re-fetches when interval changes so the
+  // notification system stays aligned with what the user actually sees.
   useEffect(() => {
     let cancelled = false
     setSnapshot(null)
     const fetchOnce = async () => {
       try {
-        const s = await getStrategySnapshot(symbol)
+        const s = await getStrategySnapshot(symbol, interval)
         if (!cancelled) setSnapshot(s)
       } catch (e) {
         if (!cancelled) setError(String(e))
@@ -142,7 +144,7 @@ export default function App() {
     fetchOnce()
     const id = window.setInterval(fetchOnce, 60 * 1000)
     return () => { cancelled = true; window.clearInterval(id) }
-  }, [symbol])
+  }, [symbol, interval])
 
   // Telegram alerts — when a subscribed strategy fires a NEW signal, send to bot.
   // Tracks per-strategy "last seen signal time" in localStorage so a stale tab

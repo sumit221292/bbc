@@ -158,18 +158,30 @@ def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> Stra
 
 
 @router.get("/snapshot", response_model=SnapshotResponse)
-async def get_snapshot(symbol: str = Query("BTCUSDT")):
+async def get_snapshot(
+    symbol: str = Query("BTCUSDT"),
+    interval: str = Query("1h", description="Timeframe for single-TF strategies"),
+):
     """Returns the current state of every registered strategy in one call.
 
-    All strategies are computed on 1h candles for fair comparison.
-    MTF strategies use the additional 4h/1d context.
+    Single-TF strategies are computed on the requested `interval` (default 1h).
+    MTF strategies always use their native 1h/4h/1d (and 5m for SMC MTF).
+
+    Passing interval matches the snapshot to whatever the user is currently
+    viewing on the chart, so notifications align with what they see.
     """
     try:
+        # 1h / 4h / 1d are always needed for MTF context.
         c1h, c4h, c1d = await asyncio.gather(
             fetch_klines(symbol, "1h", 1000),
             fetch_klines(symbol, "4h", 1000),
             fetch_klines(symbol, "1d", 1000),
         )
+        # If the user picked a non-1h interval, fetch that too for single-TF.
+        if interval == "1h":
+            c_int = c1h
+        else:
+            c_int = await fetch_klines(symbol, interval, 500)
     except Exception as e:
         raise HTTPException(502, f"Binance error: {e}")
 
@@ -201,14 +213,14 @@ async def get_snapshot(symbol: str = Query("BTCUSDT")):
             signals = annotate(run_mtf(meta.id, ctx, start_idx=50), c1h)
             rows.append(_build_snapshot(meta.id, meta.name, signals, c1h))
 
-    # Single-TF strategies on 1h
+    # Single-TF strategies on the requested interval
     for cls in list_strategies():
-        signals = annotate(cls().evaluate(c1h), c1h)
-        rows.append(_build_snapshot(cls.id, cls.name, signals, c1h))
+        signals = annotate(cls().evaluate(c_int), c_int)
+        rows.append(_build_snapshot(cls.id, cls.name, signals, c_int))
 
     return SnapshotResponse(
-        symbol=symbol.upper(), interval="1h",
-        generated_at=c1h[-1].time, strategies=rows,
+        symbol=symbol.upper(), interval=interval,
+        generated_at=c_int[-1].time, strategies=rows,
     )
 
 
