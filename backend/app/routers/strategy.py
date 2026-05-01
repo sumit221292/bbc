@@ -174,12 +174,32 @@ async def get_snapshot(symbol: str = Query("BTCUSDT")):
         raise HTTPException(502, f"Binance error: {e}")
 
     ctx = MTFContext(candles_1h=c1h, candles_4h=c4h, candles_1d=c1d)
+
+    # SMC MTF needs 5m/15m candles in addition. Fetch lazily so we don't
+    # waste a request when there's no SMC strategy registered.
+    smc_ctx: SMCMTFContext | None = None
+    if any(is_smc_mtf(meta.id) for meta in list_mtf_metas()):
+        try:
+            c5, c15 = await asyncio.gather(
+                fetch_klines(symbol, "5m", 1000),
+                fetch_klines(symbol, "15m", 500),
+            )
+            smc_ctx = SMCMTFContext(candles_5m=c5, candles_15m=c15, candles_1h=c1h)
+        except Exception:
+            smc_ctx = None
+
     rows: list[StrategySnapshot] = []
 
-    # MTF strategies first
+    # MTF strategies first. smc_mtf has its own context + entry timeframe (5m).
     for meta in list_mtf_metas():
-        signals = annotate(run_mtf(meta.id, ctx, start_idx=50), c1h)
-        rows.append(_build_snapshot(meta.id, meta.name, signals, c1h))
+        if is_smc_mtf(meta.id):
+            if smc_ctx is None:
+                continue  # data fetch failed; skip rather than 500
+            signals = annotate(run_smc_mtf(meta.id, smc_ctx, start_idx=60), smc_ctx.candles_5m)
+            rows.append(_build_snapshot(meta.id, meta.name, signals, smc_ctx.candles_5m))
+        else:
+            signals = annotate(run_mtf(meta.id, ctx, start_idx=50), c1h)
+            rows.append(_build_snapshot(meta.id, meta.name, signals, c1h))
 
     # Single-TF strategies on 1h
     for cls in list_strategies():
@@ -255,10 +275,21 @@ async def get_leaderboard(symbol: str = Query("BTCUSDT")):
         for cls in list_strategies():
             signals = annotate(cls().evaluate(tf_candles), tf_candles)
             signal_cache[(cls.id, tf)] = signals
-    # MTF only on 1h (their entry timeframe).
+    # MTF strategies on 1h. smc_mtf has its own 5m context.
+    smc_ctx_lb: SMCMTFContext | None = None
     for meta in list_mtf_metas():
-        signals = annotate(run_mtf(meta.id, ctx, start_idx=50), candles["1h"])
-        signal_cache[(meta.id, "1h")] = signals
+        if is_smc_mtf(meta.id):
+            if smc_ctx_lb is None:
+                smc_ctx_lb = SMCMTFContext(
+                    candles_5m=candles["5m"],
+                    candles_15m=candles["15m"],
+                    candles_1h=candles["1h"],
+                )
+            signals = annotate(run_smc_mtf(meta.id, smc_ctx_lb, start_idx=60), candles["5m"])
+            signal_cache[(meta.id, "5m")] = signals
+        else:
+            signals = annotate(run_mtf(meta.id, ctx, start_idx=50), candles["1h"])
+            signal_cache[(meta.id, "1h")] = signals
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
     leaderboards: list[WindowLeaderboard] = []
