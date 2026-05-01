@@ -6,10 +6,12 @@ import SignalPanel from './components/SignalPanel.jsx'
 import MarketOutlook from './components/MarketOutlook.jsx'
 import StrategyOverview from './components/StrategyOverview.jsx'
 import Leaderboard from './components/Leaderboard.jsx'
+import AlertsTab from './components/AlertsTab.jsx'
 import Resizer from './components/Resizer.jsx'
 import { getIndicators, getKlines, getLeaderboard, getOutlook, getStrategies, getStrategySnapshot, runStrategy } from './api.js'
 import { useLiveKlines } from './hooks/useLiveKlines.js'
 import { usePersistedState } from './hooks/usePersistedState.js'
+import { sendTelegram, formatSignalMessage } from './lib/telegram.js'
 
 export default function App() {
   const chartRef = useRef(null)
@@ -26,6 +28,11 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState(null)
   const [activeTab, setActiveTab] = usePersistedState('btc.tab', 'live')
   const [sidebarWidth, setSidebarWidth] = usePersistedState('btc.sidebarWidth', 380)
+
+  // Telegram alert settings — persist across refreshes.
+  const [tgToken, setTgToken] = usePersistedState('btc.tg.token', '')
+  const [tgChat, setTgChat] = usePersistedState('btc.tg.chat', '')
+  const [tgSubs, setTgSubs] = usePersistedState('btc.tg.subs', [])
 
   const [drawMode, setDrawMode] = useState('none')
   const [error, setError] = useState(null)
@@ -137,6 +144,23 @@ export default function App() {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [symbol])
 
+  // Telegram alerts — when a subscribed strategy fires a NEW signal, send to bot.
+  // Tracks per-strategy "last seen signal time" in localStorage so a stale tab
+  // doesn't keep re-notifying the same trade.
+  useEffect(() => {
+    if (!snapshot || !tgToken || !tgChat || tgSubs.length === 0) return
+    for (const row of snapshot.strategies) {
+      if (!tgSubs.includes(row.id)) continue
+      if (row.signal === 'HOLD' || !row.last_signal_time) continue
+      const key = `btc.tg.lastSignal.${row.id}`
+      const lastSeen = parseInt(localStorage.getItem(key) || '0', 10)
+      if (row.last_signal_time > lastSeen) {
+        sendTelegram(tgToken, tgChat, formatSignalMessage(row, snapshot.symbol))
+        localStorage.setItem(key, String(row.last_signal_time))
+      }
+    }
+  }, [snapshot, tgToken, tgChat, tgSubs])
+
   // Leaderboard — heavier (~5s), so only fetch when the Best tab is open.
   // Refresh every 5 minutes while the tab stays open.
   useEffect(() => {
@@ -180,10 +204,11 @@ export default function App() {
   const livePrice = useMemo(() => live?.close ?? null, [live])
 
   const tabs = [
-    { id: 'live', icon: '📊', label: 'Live' },
-    { id: 'plan', icon: '📋', label: 'Plan' },
-    { id: 'all',  icon: '🎯', label: 'All' },
-    { id: 'best', icon: '🏆', label: 'Best' },
+    { id: 'live',   icon: '📊', label: 'Live' },
+    { id: 'plan',   icon: '📋', label: 'Plan' },
+    { id: 'all',    icon: '🎯', label: 'All' },
+    { id: 'best',   icon: '🏆', label: 'Best' },
+    { id: 'alerts', icon: '🔔', label: 'Alerts' },
   ]
 
   return (
@@ -261,6 +286,14 @@ export default function App() {
             )}
             {activeTab === 'best' && (
               <Leaderboard data={leaderboard} />
+            )}
+            {activeTab === 'alerts' && (
+              <AlertsTab
+                strategies={strategies}
+                token={tgToken} setToken={setTgToken}
+                chatId={tgChat} setChatId={setTgChat}
+                subs={tgSubs} setSubs={setTgSubs}
+              />
             )}
           </div>
         </aside>
