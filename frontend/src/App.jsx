@@ -146,7 +146,8 @@ export default function App() {
 
   // Telegram alerts — when a subscribed strategy fires a NEW signal, send to bot.
   // Tracks per-strategy "last seen signal time" in localStorage so a stale tab
-  // doesn't keep re-notifying the same trade.
+  // doesn't keep re-notifying the same trade. Only marks 'seen' on a successful
+  // Telegram response — failed sends will retry on the next poll.
   useEffect(() => {
     if (!snapshot || !tgToken || !tgChat || tgSubs.length === 0) return
     for (const row of snapshot.strategies) {
@@ -155,8 +156,16 @@ export default function App() {
       const key = `btc.tg.lastSignal.${row.id}`
       const lastSeen = parseInt(localStorage.getItem(key) || '0', 10)
       if (row.last_signal_time > lastSeen) {
-        sendTelegram(tgToken, tgChat, formatSignalMessage(row, snapshot.symbol))
-        localStorage.setItem(key, String(row.last_signal_time))
+        const msg = formatSignalMessage(row, snapshot.symbol)
+        console.info('[tg-alerts] sending', row.id, '@', row.last_signal_time, 'lastSeen', lastSeen)
+        sendTelegram(tgToken, tgChat, msg).then(res => {
+          if (res.ok) {
+            localStorage.setItem(key, String(row.last_signal_time))
+            console.info('[tg-alerts] sent', row.id)
+          } else {
+            console.error('[tg-alerts] FAILED', row.id, '-', res.description)
+          }
+        })
       }
     }
   }, [snapshot, tgToken, tgChat, tgSubs])
@@ -293,6 +302,7 @@ export default function App() {
                 token={tgToken} setToken={setTgToken}
                 chatId={tgChat} setChatId={setTgChat}
                 subs={tgSubs} setSubs={setTgSubs}
+                snapshot={snapshot}
               />
             )}
           </div>

@@ -420,6 +420,27 @@ body {
   border-radius: 4px; line-height: 1.4;
 }
 
+.alerts-debug {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px; margin-bottom: 10px;
+}
+.alerts-debug-title {
+  font-weight: 700; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; margin-bottom: 8px;
+}
+.alerts-debug-list { display: flex; flex-direction: column; gap: 4px; }
+.alerts-debug-row {
+  padding: 6px 8px; background: var(--bg); border-radius: 4px;
+  font-size: 11px;
+}
+.alerts-debug-row.fire {
+  border-left: 3px solid var(--buy);
+  padding-left: 5px;
+  background: rgba(38,166,154,0.08);
+}
+.adr-name { font-weight: 600; margin-bottom: 2px; }
+.adr-meta { font-size: 10px; line-height: 1.5; }
+
 /* ---------- Leaderboard (rolling-window best performers) ---------- */
 .leaderboard {
   border: 1px solid var(--border); border-radius: 8px;

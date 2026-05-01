@@ -1,9 +1,18 @@
 import { memo, useState } from 'react'
 import { getTelegramUpdates, sendTelegram } from '../lib/telegram.js'
 
+function timeAgo(ts) {
+  if (!ts) return 'never'
+  const diff = Math.floor(Date.now() / 1000 - ts)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
+}
+
 /** UI for setting up Telegram bot credentials and selecting which
  *  strategies should fire push notifications. */
-function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSubs }) {
+function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSubs, snapshot }) {
   const [testStatus, setTestStatus] = useState('')
   const [testing, setTesting] = useState(false)
   const [detectedChats, setDetectedChats] = useState([])
@@ -160,6 +169,37 @@ function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSu
           ))}
         </div>
       </div>
+
+      {/* Debug panel — shows current state of each subscribed strategy so user
+          can see exactly why a notification did/didn't fire. */}
+      {subs.length > 0 && snapshot && (
+        <div className="alerts-debug">
+          <div className="alerts-debug-title">🔍 Debug: subscribed strategies</div>
+          <div className="alerts-debug-list">
+            {subs.map(id => {
+              const row = snapshot.strategies?.find(r => r.id === id)
+              if (!row) return (
+                <div key={id} className="alerts-debug-row">
+                  <span className="muted">{id}: not in snapshot yet</span>
+                </div>
+              )
+              const lastSeen = parseInt(localStorage.getItem(`btc.tg.lastSignal.${id}`) || '0', 10)
+              const wouldFire = row.signal !== 'HOLD' && row.last_signal_time && row.last_signal_time > lastSeen
+              return (
+                <div key={id} className={`alerts-debug-row ${wouldFire ? 'fire' : ''}`}>
+                  <div className="adr-name">{row.name}</div>
+                  <div className="adr-meta muted">
+                    signal: <b>{row.signal}</b>
+                    {' · '}last signal: <b>{timeAgo(row.last_signal_time)}</b>
+                    {' · '}last sent: <b>{lastSeen ? timeAgo(lastSeen) : 'never'}</b>
+                    {' · '}{wouldFire ? '🔔 will fire' : '— up to date'}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="alerts-foot muted small">
         💡 <b>Note:</b> Yeh notifications browser tab ke khulne par hi work karte hain.
