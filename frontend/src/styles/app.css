@@ -204,6 +204,14 @@ body {
   min-width: 0;       /* required for ellipsis to actually trigger inside flex */
   flex: 1 1 auto;
 }
+.strategy-banner-filter {
+  flex-shrink: 0;
+  font-size: 10px; font-weight: 700;
+  padding: 3px 8px; border-radius: 999px;
+  background: rgba(0,212,163,0.18); color: #00d4a3;
+  letter-spacing: 0.04em;
+  cursor: help;
+}
 
 .panel-section-title {
   font-size: 13px; font-weight: 700;

@@ -19,6 +19,29 @@ from ..trade_status import annotate, summarize
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
 
 
+# Global minimum risk:reward — strategies that emit signals worse than this
+# get them filtered out before annotation/simulation. The user requested
+# "minimum 1:2 RR or no trade" across every strategy and timeframe.
+MIN_RR = 2.0
+
+
+def _filter_min_rr(signals: list[Signal], min_rr: float = MIN_RR) -> list[Signal]:
+    """Drop signals whose reward/risk ratio is below `min_rr`. Signals that
+    are missing entry/stop/target are kept (e.g. HOLD markers)."""
+    out: list[Signal] = []
+    for s in signals:
+        if s.entry is None or s.stop_loss is None or s.target is None:
+            out.append(s)
+            continue
+        risk = abs(s.entry - s.stop_loss)
+        if risk <= 0:
+            continue  # malformed signal, drop
+        reward = abs(s.target - s.entry)
+        if (reward / risk) >= min_rr:
+            out.append(s)
+    return out
+
+
 @router.get("/list", response_model=list[StrategyMeta])
 def get_strategy_list():
     # MTF strategies first so they show up at the top of the UI selector.
@@ -30,12 +53,15 @@ def _build_result(strategy_id: str, symbol: str, interval: str,
                   partial_at_r: float | None = None) -> StrategyResult:
     """Shared post-processing: annotate trade status, pick latest, build summary.
 
+    Signals with RR below MIN_RR (1:2) are dropped first.
+
     Summary uses the proper trade simulator (one trade at a time, 2% risk per
     trade on a $1000 starting capital, compounded, with 0.2% round-trip fees).
 
     If `partial_at_r` is set, the simulator scales out 50% at that R-multiple
     and moves the stop to breakeven. Used by SMC MTF for higher expectancy.
     """
+    signals = _filter_min_rr(signals)
     signals = annotate(signals, candles)
     last_candle = candles[-1]
 
@@ -118,9 +144,10 @@ _CATEGORIES: dict[str, str] = {
 def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> StrategySnapshot:
     """Pick latest open trade (or HOLD), compute summary, package as snapshot row.
 
-    Stats use the realistic trade simulator (2% risk per trade, $1000 base,
-    compounded, fees included) — not the naive sum of price moves.
+    Signals with RR < MIN_RR are dropped first so the per-strategy stats
+    only reflect trades that meet the global risk:reward floor.
     """
+    signals = _filter_min_rr(signals)
     last_close = candles[-1].close
     open_trades = [s for s in signals if s.status == "OPEN"]
     if open_trades:
@@ -281,13 +308,14 @@ async def get_leaderboard(symbol: str = Query("BTCUSDT")):
         name_for[meta.id] = meta.name
 
     # Pre-compute signals for every (strategy, timeframe) combo we care about.
+    # Filter low-RR setups so the leaderboard only ranks 1:2-or-better trades.
     signal_cache: dict[tuple[str, str], list[Signal]] = {}
     for tf, _ in _LB_TIMEFRAMES:
         tf_candles = candles[tf]
         for cls in list_strategies():
-            signals = annotate(cls().evaluate(tf_candles), tf_candles)
-            signal_cache[(cls.id, tf)] = signals
-    # MTF strategies on 1h. smc_mtf has its own 5m context.
+            sigs = _filter_min_rr(cls().evaluate(tf_candles))
+            signal_cache[(cls.id, tf)] = annotate(sigs, tf_candles)
+    # MTF strategies on 1h. smc_mtf has its own 5m context. RR filter applied here too.
     smc_ctx_lb: SMCMTFContext | None = None
     for meta in list_mtf_metas():
         if is_smc_mtf(meta.id):
@@ -297,11 +325,11 @@ async def get_leaderboard(symbol: str = Query("BTCUSDT")):
                     candles_15m=candles["15m"],
                     candles_1h=candles["1h"],
                 )
-            signals = annotate(run_smc_mtf(meta.id, smc_ctx_lb, start_idx=60), candles["5m"])
-            signal_cache[(meta.id, "5m")] = signals
+            sigs = _filter_min_rr(run_smc_mtf(meta.id, smc_ctx_lb, start_idx=60))
+            signal_cache[(meta.id, "5m")] = annotate(sigs, candles["5m"])
         else:
-            signals = annotate(run_mtf(meta.id, ctx, start_idx=50), candles["1h"])
-            signal_cache[(meta.id, "1h")] = signals
+            sigs = _filter_min_rr(run_mtf(meta.id, ctx, start_idx=50))
+            signal_cache[(meta.id, "1h")] = annotate(sigs, candles["1h"])
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
     leaderboards: list[WindowLeaderboard] = []

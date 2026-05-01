@@ -139,6 +139,9 @@ function SignalPanel({ result, livePrice, strategies = [] }) {
       <div className="strategy-banner">
         <span className="strategy-banner-label">🤖 STRATEGY</span>
         <span className="strategy-banner-name">{strategyName}</span>
+        <span className="strategy-banner-filter" title="Trades with risk:reward below 1:2 are filtered out across all strategies and timeframes.">
+          🛡 RR ≥ 1:2
+        </span>
       </div>
 
       <div className="panel-section-title">
