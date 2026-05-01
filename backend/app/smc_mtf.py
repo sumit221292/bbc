@@ -19,6 +19,9 @@ from .smc import (
     detect_liquidity_sweep,
     detect_recent_unfilled_fvg,
     find_recent_order_block,
+    in_killzone,
+    premium_discount,
+    structure_bias,
 )
 
 
@@ -111,19 +114,39 @@ def evaluate_smc_mtf(ctx: SMCMTFContext, start_idx: int = 0) -> list[Signal]:
         if None in (atr_v, e20, rsi_v, rsi_p):
             continue
 
+        # 0. Killzone filter — only trade during London / NY sessions
+        if not in_killzone(c.time):
+            continue
+
         # 1. 1h trend bias
         bias = ctx.trend_bias_at(c.time)
         if bias == "NONE":
             continue
         direction = "bullish" if bias == "BULL" else "bearish"
 
-        # 2. 15m structure: where would smart money buy/sell?
+        # 2. 15m timeframe context
+        h15_idx = ctx.h15_idx_for(c.time)
+        if h15_idx < 40:  # need at least 2 * structure lookback (20)
+            continue
+
+        # 1b. 15m market structure must NOT contradict 1h bias.
+        # NONE is acceptable (mid-trend consolidation); only reject opposite structure.
+        struct = structure_bias(ctx.candles_15m, h15_idx, lookback=20)
+        if (bias == "BULL" and struct == "BEAR") or (bias == "BEAR" and struct == "BULL"):
+            continue
+
+        # 1c. Premium/Discount filter — buy only in discount, sell only in premium.
+        # The "value" check: don't chase. Use 15m for the leg reference.
+        zone = premium_discount(ctx.candles_15m, h15_idx, lookback=30)
+        if bias == "BULL" and zone == "premium":
+            continue   # don't buy at the high
+        if bias == "BEAR" and zone == "discount":
+            continue   # don't sell at the low
+
+        # 2b. 15m structure: where would smart money buy/sell?
         # Note: a 15m FVG/OB existing already implies past momentum (the
         # impulse that created the gap). No need for a separate 5m
         # momentum check -- that would contradict "wait for the retest".
-        h15_idx = ctx.h15_idx_for(c.time)
-        if h15_idx < 5:
-            continue
 
         # The momentum that created the 15m structure should be >= 400 pts.
         # We capture this by requiring `min_move` on the OB scan below.
@@ -195,7 +218,8 @@ def evaluate_smc_mtf(ctx: SMCMTFContext, start_idx: int = 0) -> list[Signal]:
             out.append(Signal(
                 time=c.time, type="BUY", price=c.close,
                 reason=(
-                    f"SMC MTF (1h BULL): 15m {h15_momentum:.0f}pt impulse + "
+                    f"SMC MTF (1h BULL, 15m {struct} {zone}): "
+                    f"{h15_momentum:.0f}pt impulse + "
                     + " + ".join(confluences)
                 ),
                 entry=c.close, stop_loss=stop, target=target,
@@ -207,7 +231,8 @@ def evaluate_smc_mtf(ctx: SMCMTFContext, start_idx: int = 0) -> list[Signal]:
             out.append(Signal(
                 time=c.time, type="SELL", price=c.close,
                 reason=(
-                    f"SMC MTF (1h BEAR): 15m {h15_momentum:.0f}pt impulse + "
+                    f"SMC MTF (1h BEAR, 15m {struct} {zone}): "
+                    f"{h15_momentum:.0f}pt impulse + "
                     + " + ".join(confluences)
                 ),
                 entry=c.close, stop_loss=stop, target=target,

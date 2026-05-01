@@ -26,13 +26,15 @@ def get_strategy_list():
 
 
 def _build_result(strategy_id: str, symbol: str, interval: str,
-                  candles, signals: list[Signal]) -> StrategyResult:
+                  candles, signals: list[Signal],
+                  partial_at_r: float | None = None) -> StrategyResult:
     """Shared post-processing: annotate trade status, pick latest, build summary.
 
     Summary uses the proper trade simulator (one trade at a time, 2% risk per
-    trade on a $1000 starting capital, compounded, with 0.2% round-trip fees)
-    so the P&L number reflects what would actually happen if you took these
-    signals — not the misleading sum of individual trade price moves.
+    trade on a $1000 starting capital, compounded, with 0.2% round-trip fees).
+
+    If `partial_at_r` is set, the simulator scales out 50% at that R-multiple
+    and moves the stop to breakeven. Used by SMC MTF for higher expectancy.
     """
     signals = annotate(signals, candles)
     last_candle = candles[-1]
@@ -46,11 +48,8 @@ def _build_result(strategy_id: str, symbol: str, interval: str,
             reason="Koi active trade nahi -- next signal ka wait karo",
         )
 
-    # Counts from the per-signal annotated view so the numbers match the
-    # 'Recent Trades' log the user sees. Total P&L from the realistic
-    # simulator (one trade at a time, $1000 capital, 2% risk, fees).
     counts = summarize(signals)
-    sim = simulate(candles, signals)
+    sim = simulate(candles, signals, partial_at_r=partial_at_r)
     closed = counts["wins"] + counts["losses"]
     summary = StrategySummary(
         total=counts["total"],
@@ -319,7 +318,8 @@ async def run_strategy(
             raise HTTPException(502, f"Binance error: {e}")
         smc_ctx = SMCMTFContext(candles_5m=c5, candles_15m=c15, candles_1h=c1h)
         signals = run_smc_mtf(id, smc_ctx, start_idx=60)
-        return _build_result(id, symbol, "5m", c5, signals)
+        # Multi-target: scale out 50% at 1R, move stop to breakeven for the rest.
+        return _build_result(id, symbol, "5m", c5, signals, partial_at_r=1.0)
 
     # ---- Multi-TF strategies: 1h / 4h / 1d, ignore the `interval` param ----
     if is_mtf(id):

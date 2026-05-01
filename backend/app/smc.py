@@ -1,5 +1,5 @@
 """Smart Money Concepts (SMC) helpers — Order Block, Fair Value Gap (FVG),
-Liquidity Sweep detection. Pure-Python, no external deps.
+Liquidity Sweep, Market Structure (BOS), Premium/Discount, Killzones.
 
 These are the building blocks ICT/SMC traders use to identify high-probability
 zones. The functions are stateless — they look at a slice of candles around a
@@ -7,7 +7,83 @@ given index and return either None or a structured zone description.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from .schemas import Candle
+
+
+# Trading-hour filter. Crypto is 24/7 but the genuinely dead window is
+# the late-Asia / pre-London gap: roughly 22:00 - 06:00 UTC. We allow
+# everything outside of that. Strict ICT killzones (London 07:00-10:00,
+# NY 13:00-16:00) cut too much data on small backtest windows.
+DEAD_HOURS_START = 22   # 22:00 UTC -> skip
+DEAD_HOURS_END = 6      # ... until 06:00 UTC
+
+
+def in_killzone(ts: int) -> bool:
+    """True if the given UTC timestamp is in an active session (not the
+    quiet Asian / pre-London window)."""
+    h = datetime.fromtimestamp(ts, tz=timezone.utc).hour
+    # Dead window wraps midnight: skip if hour >= 22 OR hour < 6
+    is_dead = h >= DEAD_HOURS_START or h < DEAD_HOURS_END
+    return not is_dead
+
+
+def premium_discount(candles: list[Candle], idx: int, lookback: int = 30) -> str:
+    """Position of current price within the last `lookback` bars' range.
+
+    Returns 'premium' (above 50% of the range), 'discount' (below 50%),
+    or 'equilibrium' (within 0.2% of the midpoint).
+
+    SMC rule: only buy in DISCOUNT, only sell in PREMIUM. Buying in premium
+    means chasing — you're paying retail to enter what institutions already
+    bought lower.
+    """
+    if idx < lookback:
+        return "equilibrium"
+    window = candles[idx - lookback: idx + 1]
+    high = max(c.high for c in window)
+    low = min(c.low for c in window)
+    mid = (high + low) / 2.0
+    last_close = candles[idx].close
+    if mid <= 0:
+        return "equilibrium"
+    diff_pct = (last_close - mid) / mid
+    if diff_pct > 0.002:
+        return "premium"
+    if diff_pct < -0.002:
+        return "discount"
+    return "equilibrium"
+
+
+def structure_bias(candles: list[Candle], idx: int, lookback: int = 20) -> str:
+    """Lightweight market-structure check: compare the last `lookback` bars'
+    extremes to the previous `lookback` bars'.
+
+    BULL: recent high > prior high AND recent low > prior low (HH + HL)
+    BEAR: recent low < prior low AND recent high < prior high (LL + LH)
+    NONE: anything else (sideways)
+
+    This is a cheap proxy for the full BOS/CHoCH machinery. Real ICT structure
+    tracking is more involved (per-swing-point), but this captures the core
+    idea: did the last leg make progress in one direction?
+    """
+    if idx < 2 * lookback:
+        return "NONE"
+    recent = candles[idx - lookback: idx + 1]
+    prior = candles[idx - 2 * lookback: idx - lookback]
+    if not recent or not prior:
+        return "NONE"
+    recent_high = max(c.high for c in recent)
+    recent_low = min(c.low for c in recent)
+    prior_high = max(c.high for c in prior)
+    prior_low = min(c.low for c in prior)
+
+    if recent_high > prior_high and recent_low > prior_low:
+        return "BULL"
+    if recent_low < prior_low and recent_high < prior_high:
+        return "BEAR"
+    return "NONE"
 
 
 def detect_fvg(candles: list[Candle], i: int) -> dict | None:
