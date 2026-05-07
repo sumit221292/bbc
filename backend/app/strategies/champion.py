@@ -48,7 +48,12 @@ class Champion(Strategy):
     ATR_MULT = 1.5
     STOP_PCT_MIN = 0.005
     STOP_PCT_MAX = 0.025
-    REWARD_R = 2.0
+    # v8: per-regime RR — strong trends run, breakouts/reversions don't.
+    # Pure 1:3 globally tanked the 1h MILD branch (price doesn't reach 3R
+    # often enough on short TFs). Pure 1:2 capped strong-trend gains.
+    REWARD_R_STRONG = 2.5     # strong trend: amplify continuation, but 3R too far on 1d
+    REWARD_R_MILD = 2.0       # mild trend: capture short bursts
+    REWARD_R_CHOP = 2.0       # chop: BB-middle target, ~2R
     COOLDOWN_BARS = 6
 
     # Quality gates
@@ -115,7 +120,7 @@ class Champion(Strategy):
             stop_dist = a[i] * self.ATR_MULT
             stop_dist = max(stop_dist, c.close * self.STOP_PCT_MIN)
             stop_dist = min(stop_dist, c.close * self.STOP_PCT_MAX)
-            target_dist = stop_dist * self.REWARD_R
+            # target_dist is set per-regime below
 
             # --- Regime classification ---
             adx_now = adx_v[i]
@@ -149,10 +154,11 @@ class Champion(Strategy):
                               and rsi_p < self.PULLBACK_RSI_BUY_MAX
                               and r[i] > rsi_p)
                 if pullback and rsi_bounce:
+                    target_dist = stop_dist * self.REWARD_R_STRONG
                     out.append(Signal(
                         time=c.time, type="BUY", price=c.close,
                         reason=(
-                            f"Champion BULL_TREND (ADX={adx_now:.0f}): "
+                            f"Champion BULL_TREND (ADX={adx_now:.0f}, RR=1:{self.REWARD_R_STRONG:.0f}): "
                             f"pullback to EMA20 + RSI bounce ({rsi_p:.0f}->{r[i]:.0f})"
                         ),
                         entry=c.close,
@@ -173,10 +179,11 @@ class Champion(Strategy):
                             and rsi_p > self.PULLBACK_RSI_SELL_MIN
                             and r[i] < rsi_p)
                 if rejection and rsi_roll:
+                    target_dist = stop_dist * self.REWARD_R_STRONG
                     out.append(Signal(
                         time=c.time, type="SELL", price=c.close,
                         reason=(
-                            f"Champion BEAR_TREND (ADX={adx_now:.0f}): "
+                            f"Champion BEAR_TREND (ADX={adx_now:.0f}, RR=1:{self.REWARD_R_STRONG:.0f}): "
                             f"rally to EMA20 + RSI roll ({rsi_p:.0f}->{r[i]:.0f})"
                         ),
                         entry=c.close,
@@ -191,10 +198,11 @@ class Champion(Strategy):
                 if (c.close > window_high * (1 + self.BREAKOUT_MARGIN_PCT)
                         and c.volume >= avg_vol * self.BREAKOUT_VOL_MULT
                         and r[i] < self.BREAKOUT_RSI_LONG_MAX):
+                    target_dist = stop_dist * self.REWARD_R_MILD
                     out.append(Signal(
                         time=c.time, type="BUY", price=c.close,
                         reason=(
-                            f"Champion BULL_MILD (ADX={adx_now:.0f}): "
+                            f"Champion BULL_MILD (ADX={adx_now:.0f}, RR=1:{self.REWARD_R_MILD:.0f}): "
                             f"breakout {window_high:.0f} on "
                             f"{c.volume / avg_vol:.1f}x vol"
                         ),
@@ -209,10 +217,11 @@ class Champion(Strategy):
                 if (c.close < window_low * (1 - self.BREAKOUT_MARGIN_PCT)
                         and c.volume >= avg_vol * self.BREAKOUT_VOL_MULT
                         and r[i] > self.BREAKOUT_RSI_SHORT_MIN):
+                    target_dist = stop_dist * self.REWARD_R_MILD
                     out.append(Signal(
                         time=c.time, type="SELL", price=c.close,
                         reason=(
-                            f"Champion BEAR_MILD (ADX={adx_now:.0f}): "
+                            f"Champion BEAR_MILD (ADX={adx_now:.0f}, RR=1:{self.REWARD_R_MILD:.0f}): "
                             f"breakdown {window_low:.0f} on "
                             f"{c.volume / avg_vol:.1f}x vol"
                         ),
@@ -231,7 +240,8 @@ class Champion(Strategy):
                         and c.close > bbl[i]
                         and rsi_p is not None
                         and rsi_p < self.CHOP_RSI_OVERSOLD):
-                    # Target = BB middle, but enforce 2R minimum
+                    # Target = BB middle, but enforce regime RR floor
+                    target_dist = stop_dist * self.REWARD_R_CHOP
                     target = max(bbm[i], c.close + target_dist)
                     out.append(Signal(
                         time=c.time, type="BUY", price=c.close,
@@ -248,6 +258,7 @@ class Champion(Strategy):
                         and c.close < bbu[i]
                         and rsi_p is not None
                         and rsi_p > self.CHOP_RSI_OVERBOUGHT):
+                    target_dist = stop_dist * self.REWARD_R_CHOP
                     target = min(bbm[i], c.close - target_dist)
                     out.append(Signal(
                         time=c.time, type="SELL", price=c.close,
