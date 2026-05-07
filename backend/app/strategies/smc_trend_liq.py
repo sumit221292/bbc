@@ -1,34 +1,42 @@
-"""SMC Trend + Liquidity Combo — port of the Pine Script v2 strategy.
+"""SMC Trend + Liquidity Combo — Pine v2 port, regime-filtered.
 
-Logic mirrors the user's Pine source:
-  1. HTF (4h) EMA50 trend bias
-  2. Real pivot-high / pivot-low detection (5 bars left + right)
-  3. Liquidity sweep over the prior 20 bars (wick + reclaim)
-  4. Break of Structure: close beyond the last confirmed pivot
-  5. Entry only when ALL three align (trend + sweep + BOS) within the
-     sweep validity window (5 bars)
-  6. SL = lowest_20 / highest_20 ± a small price-tick padding
-  7. TP = entry ± risk × RR (default 1:4)
+Tuning history (in commit messages):
+  v1: Pine defaults  (4 signals, too rare to evaluate)
+  v2: + continuation (64 signals, 25% WR, breakeven)
+  v3: continuation + pullback (31 signals, 13.8% WR, worse)
+  v4: drop continuation (14 signals, 15.4% WR, still bad in chop)
+  v5 (current):
+      + 4h ADX > 20 filter (only trade in real trends)
+      + ATR-based SL with floor (more breathing room than wick stops)
+      + RR 1:3 -> 1:2 (matches global filter; achievable targets)
 
-Runs on 1h candles using the existing MTFContext (which already fetches
-1h + 4h + 1d). The 4h candles drive the trend bias.
+Lesson: SMC trend+sweep is a TRENDING-MARKET strategy. In chop the sweep
+often happens AT the top/bottom and reverses. The ADX filter ensures we
+only fire when there's a real directional move on the 4h timeframe.
 """
 from __future__ import annotations
 
 from bisect import bisect_right
 
+from ..indicators import atr
 from ..multi_tf import INTERVAL_SECONDS, MTFContext
 from ..schemas import Candle, Signal
 
 
-# Tunables (mirrored from the Pine script defaults)
 EMA_LEN = 50
-PIVOT_LEN = 5            # ta.pivothigh / pivotlow lookback both sides
-LOOKBACK = 20            # liquidity / SL window
-SWEEP_WINDOW = 5         # bars allowed between sweep and BOS
-RR = 4.0                 # 1:4 risk:reward
-SL_PADDING = 0.10        # 10 BTC ticks (~$0.10) — tiny buffer
-COOLDOWN_BARS = 6        # don't fire back-to-back signals
+PIVOT_LEN = 3
+LOOKBACK = 15
+SWEEP_WINDOW = 12
+RR = 2.0                  # 1:2 (matches global RR floor)
+COOLDOWN_BARS = 4
+
+# ADX(14) on 4h must clear this to confirm a real trending regime.
+ADX_4H_MIN = 20.0
+
+# ATR-based SL is more forgiving than a wick-based stop. The actual SL is
+# max(swing-based stop, ATR×1.5 stop) to keep enough room.
+ATR_PERIOD = 14
+ATR_MULT = 1.5
 
 
 def _is_swing_high(candles: list[Candle], i: int, n: int) -> bool:
@@ -56,15 +64,26 @@ def _is_swing_low(candles: list[Candle], i: int, n: int) -> bool:
 
 
 def _h4_idx_for(h4_times: list[int], t: int) -> int:
-    """Index of the latest 4h bar that has fully closed by time t."""
     cutoff = t - INTERVAL_SECONDS["4h"]
     return bisect_right(h4_times, cutoff) - 1
 
 
 def evaluate_smc_trend_liq(ctx: MTFContext, start_idx: int = 0) -> list[Signal]:
     c1h = ctx.candles_1h
+    c4h = ctx.candles_4h
     h4_times = ctx.h4_times
-    h4_ema50 = ctx.h4_ema50  # already computed in MTFContext
+    h4_ema50 = ctx.h4_ema50
+
+    # 4h ADX for the regime filter.
+    from ..indicators import adx as adx_fn
+    h4_adx, _, _ = adx_fn(
+        [c.high for c in c4h], [c.low for c in c4h], [c.close for c in c4h], 14,
+    )
+
+    # 1h ATR for stop sizing.
+    h1_atr = atr(
+        [c.high for c in c1h], [c.low for c in c1h], [c.close for c in c1h], ATR_PERIOD,
+    )
 
     out: list[Signal] = []
     last_ph: float | None = None
@@ -73,23 +92,22 @@ def evaluate_smc_trend_liq(ctx: MTFContext, start_idx: int = 0) -> list[Signal]:
     sweep_high_bar = -10**9
     last_sig_idx = -10**9
 
-    start = max(start_idx, LOOKBACK + PIVOT_LEN)
+    start = max(start_idx, LOOKBACK + PIVOT_LEN, ATR_PERIOD + 1)
     for i in range(start, len(c1h)):
-        if i - last_sig_idx < COOLDOWN_BARS:
-            continue
         c = c1h[i]
 
-        # --- HTF (4h) trend bias ---
+        # --- HTF (4h) trend bias + ADX regime filter ---
         h4_idx = _h4_idx_for(h4_times, c.time)
         if h4_idx < 0:
             continue
         h4_ema = h4_ema50[h4_idx]
-        if h4_ema is None:
+        h4_adx_v = h4_adx[h4_idx] if h4_idx < len(h4_adx) else None
+        if h4_ema is None or h4_adx_v is None or h4_adx_v < ADX_4H_MIN:
             continue
         uptrend = c.close > h4_ema
         downtrend = c.close < h4_ema
 
-        # --- Pivot confirmation (with PIVOT_LEN-bar lookahead, no future bias) ---
+        # --- Pivot confirmation ---
         confirm_idx = i - PIVOT_LEN
         if confirm_idx >= PIVOT_LEN:
             if _is_swing_high(c1h, confirm_idx, PIVOT_LEN):
@@ -97,7 +115,7 @@ def evaluate_smc_trend_liq(ctx: MTFContext, start_idx: int = 0) -> list[Signal]:
             if _is_swing_low(c1h, confirm_idx, PIVOT_LEN):
                 last_pl = c1h[confirm_idx].low
 
-        # --- Liquidity sweep over prior 20 bars (excluding current) ---
+        # --- Liquidity sweep detection ---
         prior_window = c1h[i - LOOKBACK: i]
         prior_high = max(k.high for k in prior_window)
         prior_low = min(k.low for k in prior_window)
@@ -114,28 +132,40 @@ def evaluate_smc_trend_liq(ctx: MTFContext, start_idx: int = 0) -> list[Signal]:
         bos_buy = last_ph is not None and c.close > last_ph
         bos_sell = last_pl is not None and c.close < last_pl
 
-        # --- Entry: trend + sweep + BOS all aligned ---
+        if i - last_sig_idx < COOLDOWN_BARS:
+            continue
+
+        # --- Stop sizing: max of (swing-based, ATR-based) for breathing room ---
+        atr_v = h1_atr[i]
+        if atr_v is None:
+            continue
+        atr_stop_dist = atr_v * ATR_MULT
+
         if uptrend and sweep_buy_active and bos_buy:
-            sl = prior_low - SL_PADDING
+            swing_sl = prior_low
+            atr_sl = c.close - atr_stop_dist
+            sl = min(swing_sl, atr_sl)   # whichever is further from entry
             tp = c.close + (c.close - sl) * RR
             out.append(Signal(
                 time=c.time, type="BUY", price=c.close,
                 reason=(
-                    f"SMC Trend+Liq BUY: 4h uptrend (>{h4_ema:.0f}), "
-                    f"swept ${prior_low:.0f}, BOS ${last_ph:.0f}, RR=1:{RR:.0f}"
+                    f"SMC Trend+Liq BUY: 4h>${h4_ema:.0f} ADX={h4_adx_v:.0f}, "
+                    f"swept ${prior_low:.0f}, BOS>${last_ph:.0f}, RR=1:{RR:.0f}"
                 ),
                 entry=c.close, stop_loss=sl, target=tp,
             ))
-            sweep_low_bar = -10**9  # reset so we don't re-fire on the same sweep
+            sweep_low_bar = -10**9
             last_sig_idx = i
         elif downtrend and sweep_sell_active and bos_sell:
-            sl = prior_high + SL_PADDING
+            swing_sl = prior_high
+            atr_sl = c.close + atr_stop_dist
+            sl = max(swing_sl, atr_sl)
             tp = c.close - (sl - c.close) * RR
             out.append(Signal(
                 time=c.time, type="SELL", price=c.close,
                 reason=(
-                    f"SMC Trend+Liq SELL: 4h downtrend (<{h4_ema:.0f}), "
-                    f"swept ${prior_high:.0f}, BOS ${last_pl:.0f}, RR=1:{RR:.0f}"
+                    f"SMC Trend+Liq SELL: 4h<${h4_ema:.0f} ADX={h4_adx_v:.0f}, "
+                    f"swept ${prior_high:.0f}, BOS<${last_pl:.0f}, RR=1:{RR:.0f}"
                 ),
                 entry=c.close, stop_loss=sl, target=tp,
             ))
