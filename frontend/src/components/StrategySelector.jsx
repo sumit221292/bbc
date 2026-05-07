@@ -7,6 +7,10 @@ const CATEGORIES = [
     ids: ['mtf_chop_aware', 'mtf_strict', 'mtf_2screen', 'mtf_chop_only'],
   },
   {
+    label: '🏆 Champion (regime-adaptive, all-in-one)',
+    ids: ['champion'],
+  },
+  {
     label: '⚡ Selective (kam trade, high quality)',
     ids: ['best'],
   },

@@ -125,6 +125,7 @@ _CATEGORIES: dict[str, str] = {
     "mtf_chop_only": "Recommended (Multi-TF)",
     "smc_mtf": "Smart Money",
     "smc_trend_liq": "Smart Money",
+    "champion": "Champion",
     "best": "Selective",
     "smc_momentum": "Smart Money",
     "trend_following": "Trend",
