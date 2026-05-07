@@ -17,6 +17,7 @@ from ..multi_tf import (
     evaluate_2screen,
 )
 from ..smc_mtf import SMCMTFContext, evaluate_smc_mtf
+from .smc_trend_liq import evaluate_smc_trend_liq
 from ..schemas import Signal, StrategyMeta
 
 
@@ -47,6 +48,14 @@ _MTF_REGISTRY: dict[str, tuple[str, str, Callable[[MTFContext, int], list[Signal
         "Only trades mean-reversion when 1d is in chop. Ignores trends entirely. "
         "Runs on 1h candles.",
         evaluate_chop_only,
+    ),
+    "smc_trend_liq": (
+        "🧩 SMC Trend + Liquidity Combo (1:4 RR)",
+        "Port of the Pine v2 strategy: 4h EMA50 trend bias + 1h pivot-based "
+        "Break of Structure + 20-bar liquidity sweep + reclaim. Fires only when "
+        "all three align inside the sweep validity window. Targets 1:4 RR. "
+        "Runs on 1h candles.",
+        evaluate_smc_trend_liq,
     ),
     # SMC MTF uses different timeframes (5m/15m/1h) and a different context
     # type. The router dispatches it through a separate code path -- see
