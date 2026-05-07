@@ -112,9 +112,37 @@ async def send_telegram(token: str, chat_id: str, text: str) -> tuple[bool, str]
         return False, str(e)
 
 
+def _verify_direction(sig) -> tuple[str, bool]:
+    """Cross-check the signal's declared type against its stop/target geometry.
+
+    For BUY: stop < entry < target.
+    For SELL: target < entry < stop.
+
+    Returns (effective_type, was_corrected). If the geometry contradicts the
+    declared type, we trust the geometry and flag the signal as corrected so
+    the alert message can warn the user.
+    """
+    if sig.entry is None or sig.stop_loss is None or sig.target is None:
+        return sig.type, False
+    e, sl, tp = sig.entry, sig.stop_loss, sig.target
+    geometry_buy = sl < e < tp
+    geometry_sell = tp < e < sl
+    if sig.type == "BUY" and not geometry_buy:
+        return ("SELL" if geometry_sell else sig.type), True
+    if sig.type == "SELL" and not geometry_sell:
+        return ("BUY" if geometry_buy else sig.type), True
+    return sig.type, False
+
+
 def _format_signal(symbol: str, name: str, sig) -> str:
-    sign = "🟢" if sig.type == "BUY" else "🔴" if sig.type == "SELL" else "⏸"
-    action = "BUY (Khareedo)" if sig.type == "BUY" else "SELL (Becho)" if sig.type == "SELL" else "WAIT"
+    effective_type, corrected = _verify_direction(sig)
+
+    sign = "🟢" if effective_type == "BUY" else "🔴" if effective_type == "SELL" else "⏸"
+    action = (
+        "BUY (Khareedo)" if effective_type == "BUY"
+        else "SELL (Becho)" if effective_type == "SELL"
+        else "WAIT"
+    )
     # Markdown-escape the strategy name (Python 3.11 disallows backslashes
     # inside f-string expressions, so do this on a separate line).
     safe_name = name.replace("*", "").replace("_", "\\_")
@@ -122,14 +150,22 @@ def _format_signal(symbol: str, name: str, sig) -> str:
         f"{sign} *{action}* — `{symbol}`",
         f"*Strategy:* {safe_name}",
     ]
+    if corrected:
+        parts.append(
+            "⚠️ _Direction was corrected from the strategy's declared "
+            f"{sig.type} to match the actual stop/target geometry._"
+        )
     if sig.entry is not None:
         parts.append(f"*Entry:* `${sig.entry:,.2f}`")
     if sig.stop_loss is not None and sig.entry:
+        # Directional arrow leaves no doubt: SL ↓ for BUY (below), SL ↑ for SELL (above).
+        sl_arrow = "↓" if sig.stop_loss < sig.entry else "↑"
         loss_pct = abs(sig.stop_loss - sig.entry) / sig.entry * 100
-        parts.append(f"*Stop:* `${sig.stop_loss:,.2f}` (-{loss_pct:.2f}%)")
+        parts.append(f"*Stop {sl_arrow}:* `${sig.stop_loss:,.2f}` (-{loss_pct:.2f}%)")
     if sig.target is not None and sig.entry:
+        tp_arrow = "↑" if sig.target > sig.entry else "↓"
         prof_pct = abs(sig.target - sig.entry) / sig.entry * 100
-        parts.append(f"*Target:* `${sig.target:,.2f}` (+{prof_pct:.2f}%)")
+        parts.append(f"*Target {tp_arrow}:* `${sig.target:,.2f}` (+{prof_pct:.2f}%)")
     if sig.entry and sig.stop_loss and sig.target:
         risk = abs(sig.entry - sig.stop_loss)
         if risk > 0:
@@ -187,6 +223,21 @@ async def alert_loop():
                         continue
                     last_seen = cfg.last_seen.get(sub.strategy_id, 0)
                     if latest.time > last_seen:
+                        # Loud audit log for every signal — captures any future
+                        # direction-mismatch evidence in raw form.
+                        log.info(
+                            "[ALERT] %s type=%s entry=%s stop=%s target=%s reason=%r",
+                            sub.strategy_id, latest.type, latest.entry,
+                            latest.stop_loss, latest.target, latest.reason,
+                        )
+                        eff_type, corrected = _verify_direction(latest)
+                        if corrected:
+                            log.error(
+                                "[DIRECTION-MISMATCH] %s declared %s but geometry "
+                                "indicates %s (entry=%s stop=%s target=%s)",
+                                sub.strategy_id, latest.type, eff_type,
+                                latest.entry, latest.stop_loss, latest.target,
+                            )
                         msg = _format_signal(cfg.symbol, name, latest)
                         ok, err = await send_telegram(cfg.token, cfg.chat_id, msg)
                         if ok:
