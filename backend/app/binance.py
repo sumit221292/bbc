@@ -5,6 +5,7 @@ No API key required.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator
 
@@ -35,6 +36,41 @@ async def fetch_klines(symbol: str, interval: str, limit: int = 500) -> list[Can
         resp = await client.get(url, params=params)
         resp.raise_for_status()
         return [_kline_to_candle(k) for k in resp.json()]
+
+
+async def fetch_klines_paginated(symbol: str, interval: str, total_bars: int) -> list[Candle]:
+    """Fetch up to `total_bars` historical klines by paging back in 1000-bar chunks.
+
+    Binance caps each /klines call at 1000 rows; we walk backward using the
+    `endTime` parameter until we have enough history. Returns chronological
+    (oldest -> newest) without duplicates.
+    """
+    url = f"{settings.binance_rest}/api/v3/klines"
+    all_candles: list[Candle] = []
+    end_time_ms: int | None = None
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        while len(all_candles) < total_bars:
+            batch_size = min(1000, total_bars - len(all_candles))
+            params = {
+                "symbol": symbol.upper(),
+                "interval": interval,
+                "limit": batch_size,
+            }
+            if end_time_ms is not None:
+                params["endTime"] = end_time_ms
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            raw = resp.json()
+            if not raw:
+                break  # exhausted available history
+            batch = [_kline_to_candle(k) for k in raw]
+            all_candles = batch + all_candles
+            # Step back: 1ms before the oldest bar in this batch
+            end_time_ms = batch[0].time * 1000 - 1
+            await asyncio.sleep(0.05)  # gentle pacing
+
+    return all_candles[-total_bars:] if all_candles else []
 
 
 async def stream_klines(symbol: str, interval: str) -> AsyncIterator[Candle]:
