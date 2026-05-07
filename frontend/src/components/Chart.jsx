@@ -91,10 +91,14 @@ const Chart = forwardRef(function Chart(_, ref) {
       if (isDrawingRef.current) redraw()
     })
 
-    // mouse events on container (overlay is pointer-events:none)
+    // Mouse events go on the OVERLAY itself when draw mode is active so that
+    // lightweight-charts can't grab the click first for zoom/pan. The
+    // setDrawingMode imperative method toggles overlay.pointerEvents between
+    // 'none' (clicks pass through to chart) and 'auto' (overlay captures).
     const onDown = (e) => {
       if (drawModeRef.current === 'none') return
-      overlay.style.pointerEvents = 'auto' // capture future moves
+      e.preventDefault()
+      e.stopPropagation()
       const pt = pickPoint(e)
       if (!pt) return
       isDrawingRef.current = true
@@ -103,6 +107,7 @@ const Chart = forwardRef(function Chart(_, ref) {
       } else {
         draftRef.current = { type: drawModeRef.current, points: [pt, pt] }
       }
+      redraw()
     }
     const onMove = (e) => {
       if (!isDrawingRef.current || !draftRef.current) return
@@ -117,14 +122,13 @@ const Chart = forwardRef(function Chart(_, ref) {
     const onUp = () => {
       if (!isDrawingRef.current) return
       isDrawingRef.current = false
-      overlay.style.pointerEvents = 'none'
       if (draftRef.current) {
         drawingsRef.current.push(draftRef.current)
         draftRef.current = null
       }
       redraw()
     }
-    containerRef.current.addEventListener('mousedown', onDown)
+    overlay.addEventListener('mousedown', onDown)
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
 
@@ -166,7 +170,7 @@ const Chart = forwardRef(function Chart(_, ref) {
 
     return () => {
       ro.disconnect()
-      containerRef.current && containerRef.current.removeEventListener('mousedown', onDown)
+      overlay.removeEventListener('mousedown', onDown)
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       chart.remove()
@@ -252,7 +256,12 @@ const Chart = forwardRef(function Chart(_, ref) {
     },
     setDrawingMode(mode) {
       drawModeRef.current = mode
-      // when in 'none', we leave overlay non-interactive so the chart can pan/zoom.
+      // Overlay captures clicks only while drawing is active; otherwise it
+      // stays transparent so the chart underneath can be panned and zoomed.
+      if (overlayRef.current) {
+        overlayRef.current.style.pointerEvents = mode === 'none' ? 'none' : 'auto'
+        overlayRef.current.style.cursor = mode === 'none' ? 'default' : 'crosshair'
+      }
     },
     clearDrawings() {
       drawingsRef.current = []

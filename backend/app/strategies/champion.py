@@ -44,16 +44,15 @@ class Champion(Strategy):
     ADX_STRONG = 30.0
     ADX_MILD = 15.0
 
-    # Risk
-    ATR_MULT = 1.5
-    STOP_PCT_MIN = 0.005
-    STOP_PCT_MAX = 0.025
-    # v8: per-regime RR — strong trends run, breakouts/reversions don't.
-    # Pure 1:3 globally tanked the 1h MILD branch (price doesn't reach 3R
-    # often enough on short TFs). Pure 1:2 capped strong-trend gains.
-    REWARD_R_STRONG = 2.5     # strong trend: amplify continuation, but 3R too far on 1d
+    # Risk — v10: tightened SL after empirical sweep (best avg PnL).
+    # Sweep test: ATR_MULT 1.5/1.2/1.0/0.8/0.5 -> 1.0 won decisively.
+    # Going tighter (0.8, 0.5) hurt because normal noise hits the stop.
+    ATR_MULT = 1.0
+    STOP_PCT_MIN = 0.003
+    STOP_PCT_MAX = 0.015
+    REWARD_R_STRONG = 2.5     # strong trend: amplify continuation
     REWARD_R_MILD = 2.0       # mild trend: capture short bursts
-    REWARD_R_CHOP = 2.0       # chop: BB-middle target, ~2R
+    REWARD_R_CHOP = 2.0       # chop: BB-middle target
     COOLDOWN_BARS = 6
 
     # Quality gates
