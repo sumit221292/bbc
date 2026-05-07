@@ -1,5 +1,6 @@
-import { memo, useState } from 'react'
-import { getTelegramUpdates, sendTelegram } from '../lib/telegram.js'
+import { memo, useEffect, useState } from 'react'
+import { getAlertsConfig, sendBackendTest, setAlertsConfig } from '../api.js'
+import { getTelegramUpdates } from '../lib/telegram.js'
 
 function timeAgo(ts) {
   if (!ts) return 'never'
@@ -10,94 +11,156 @@ function timeAgo(ts) {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
-/** UI for setting up Telegram bot credentials and selecting which
- *  strategies should fire push notifications. */
-function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSubs, snapshot }) {
+/** UI for setting up the always-on backend Telegram worker.
+ *  Token + chat_id are sent to /api/alerts/config; the server polls every
+ *  60 seconds and pushes Telegram on new signals — works even with the
+ *  browser tab closed. */
+function AlertsTab({ strategies, snapshot }) {
+  const [token, setToken] = useState('')
+  const [chatId, setChatId] = useState('')
+  const [enabled, setEnabled] = useState(true)
+  const [subs, setSubs] = useState([])    // [{ strategy_id, interval }]
+  const [serverState, setServerState] = useState(null)
   const [testStatus, setTestStatus] = useState('')
-  const [testing, setTesting] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [detectedChats, setDetectedChats] = useState([])
   const [detectStatus, setDetectStatus] = useState('')
 
+  // Pull current config on mount
+  useEffect(() => {
+    getAlertsConfig().then(s => {
+      setServerState(s)
+      setChatId(s.chat_id || '')
+      setEnabled(s.enabled)
+      setSubs(s.subscriptions || [])
+      // token is never returned for security; user re-enters once
+    }).catch(() => { /* offline ok */ })
+    const id = setInterval(() => {
+      getAlertsConfig().then(setServerState).catch(() => {})
+    }, 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  const subIds = new Set(subs.map(s => s.strategy_id))
+
   const toggle = (id) => {
-    if (subs.includes(id)) {
-      setSubs(subs.filter(s => s !== id))
+    if (subIds.has(id)) {
+      setSubs(subs.filter(s => s.strategy_id !== id))
     } else {
-      setSubs([...subs, id])
-      // Mark current time as last-seen so we don't notify for past signals.
-      const now = Math.floor(Date.now() / 1000)
-      localStorage.setItem(`btc.tg.lastSignal.${id}`, String(now))
+      setSubs([...subs, { strategy_id: id, interval: null }])
     }
   }
 
   const subAll = () => {
-    setSubs(strategies.map(s => s.id))
-    const now = Math.floor(Date.now() / 1000)
-    for (const s of strategies) {
-      localStorage.setItem(`btc.tg.lastSignal.${s.id}`, String(now))
-    }
+    setSubs(strategies.map(s => ({ strategy_id: s.id, interval: null })))
   }
   const subNone = () => setSubs([])
 
+  const save = async () => {
+    setSaving(true)
+    try {
+      const payload = {
+        token: token || undefined,  // omit if empty so backend keeps existing
+        chat_id: chatId,
+        enabled,
+        subscriptions: subs,
+      }
+      // FastAPI requires explicit fields, send empty string to mean "no change to token"
+      const cleaned = { ...payload, token: token || '' }
+      const updated = await setAlertsConfig(cleaned)
+      setServerState(updated)
+      setTestStatus('✅ Saved to backend')
+      setToken('')  // clear local copy after saving (it's stored server-side)
+    } catch (e) {
+      setTestStatus(`❌ Save failed: ${e}`)
+    }
+    setSaving(false)
+  }
+
+  const sendTest = async () => {
+    if (!chatId) {
+      setTestStatus('❌ Need chat_id')
+      return
+    }
+    if (!token && !serverState?.has_token) {
+      setTestStatus('❌ Need token (paste it once, then click Save)')
+      return
+    }
+    setTestStatus('Sending…')
+    // Use whichever token is freshest (form takes priority)
+    const useToken = token || ''  // empty -> backend uses stored
+    if (!useToken) {
+      setTestStatus('❌ Token must be entered in the form for the test')
+      return
+    }
+    const res = await sendBackendTest({ token: useToken, chat_id: chatId })
+    if (res.ok) setTestStatus('✅ Sent! Telegram pe check karo.')
+    else setTestStatus('❌ ' + res.description)
+  }
+
   const detectChatId = async () => {
     if (!token) {
-      setDetectStatus('❌ Pehle bot token paste karo.')
+      setDetectStatus('❌ Pehle bot token paste karo (form mein).')
       return
     }
     setDetectStatus('Checking…')
     setDetectedChats([])
     const res = await getTelegramUpdates(token)
-    if (!res.ok) {
-      setDetectStatus('❌ ' + res.description)
-      return
-    }
+    if (!res.ok) { setDetectStatus('❌ ' + res.description); return }
     if (res.chats.length === 0) {
       setDetectStatus(
-        '⚠️ No chats found. Pehle apne bot ko message karo: ' +
-        'Telegram pe @Msurebbtc_bot kholo, "Start" → kuch bhi bhejo, fir yahan re-click karo.'
+        '⚠️ No chats found. Pehle apne bot ko message karo, fir yahan re-click karo.'
       )
       return
     }
     setDetectedChats(res.chats)
-    setDetectStatus(`✅ ${res.chats.length} chat(s) found — click karke select karo:`)
+    setDetectStatus(`✅ ${res.chats.length} chat(s) found:`)
   }
 
-  const sendTest = async () => {
-    if (!token || !chatId) return
-    setTesting(true)
-    setTestStatus('Sending…')
-    const res = await sendTelegram(token, chatId,
-      '✅ *Test message* from Crypto Trading Dashboard\n\n' +
-      'Notifications setup OK! Tum jab koi strategy subscribe karoge, ' +
-      'naye signals automatically yahan aate rahenge.')
-    setTesting(false)
-    if (res.ok) setTestStatus('✅ Sent! Telegram pe check karo.')
-    else setTestStatus('❌ Failed: ' + res.description)
-  }
+  const lastPollAge = serverState?.last_poll
+    ? timeAgo(serverState.last_poll)
+    : 'never'
+  const workerActive = serverState?.has_token && serverState?.enabled && (serverState?.subscriptions?.length ?? 0) > 0
 
   return (
     <div className="alerts-tab">
-      <div className="panel-section-title">🔔 Telegram Alerts</div>
+      <div className="panel-section-title">🔔 Telegram Alerts (Always-On)</div>
+
+      {/* Worker status banner */}
+      <div className={`worker-status ${workerActive ? 'active' : 'idle'}`}>
+        <span className="ws-dot" />
+        <span>
+          {workerActive
+            ? <>Backend worker <b>ACTIVE</b> · last poll <b>{lastPollAge}</b> · browser band ho to bhi alerts aayenge</>
+            : <>Backend worker <b>idle</b> · token + chat_id + at least 1 subscription needed</>
+          }
+        </span>
+      </div>
+      {serverState?.last_error && (
+        <div className="worker-error">⚠️ Last error: {serverState.last_error}</div>
+      )}
 
       <details className="alerts-help">
         <summary>📖 Setup karne ka tareeka (one-time, ~2 minutes)</summary>
         <ol>
           <li>Telegram open karo, search <b>@BotFather</b>, "Start" karo</li>
           <li>Send <code>/newbot</code> → naam aur username choose karo</li>
-          <li>BotFather ek <b>Bot Token</b> dega (looks like <code>123456:ABC-xyz...</code>) — yahan paste karo</li>
-          <li>Apne naye bot ko search karo (jo username diya tha) aur <b>Start</b> click karo (ek baar message bhejna zaroori hai)</li>
-          <li>Telegram pe search <b>@userinfobot</b>, Start karo, woh tumhara <b>Chat ID</b> dega — yahan paste karo</li>
-          <li>"Send Test Message" click karke verify karo</li>
+          <li>BotFather <b>Bot Token</b> dega — yahan paste karo</li>
+          <li>Apne naye bot ko search karke <b>Start</b> click karo (ek baar message bhejna zaroori hai)</li>
+          <li>"Auto-detect Chat ID" button dabao OR @userinfobot se chat_id le aao</li>
+          <li>"Save" click karo — backend mein store ho jaayega</li>
+          <li>"Send Test Message" se verify karo</li>
         </ol>
       </details>
 
       <div className="alerts-form">
         <label>
-          <span>Bot Token</span>
+          <span>Bot Token {serverState?.has_token && <em className="muted small">(stored on server)</em>}</span>
           <input
             type="password"
             value={token}
             onChange={e => setToken(e.target.value)}
-            placeholder="123456:ABC-xyz-your-bot-token"
+            placeholder={serverState?.has_token ? '••••••••• (re-enter to change)' : '123456:ABC-xyz...'}
           />
         </label>
         <label>
@@ -110,35 +173,36 @@ function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSu
           />
         </label>
 
+        <label className="alerts-checkbox">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={e => setEnabled(e.target.checked)}
+          />
+          <span>Worker enabled (uncheck to pause without losing config)</span>
+        </label>
+
         <div className="alerts-actions">
-          <button
-            className="alerts-test secondary"
-            onClick={detectChatId}
-            disabled={!token}
-          >
+          <button className="alerts-test secondary" onClick={detectChatId} disabled={!token}>
             🔍 Auto-detect Chat ID
           </button>
-          <button
-            className="alerts-test"
-            onClick={sendTest}
-            disabled={!token || !chatId || testing}
-          >
-            {testing ? 'Sending…' : 'Send Test Message'}
+          <button className="alerts-test secondary" onClick={sendTest}
+                  disabled={!chatId || (!token && !serverState?.has_token)}>
+            Send Test
+          </button>
+          <button className="alerts-test" onClick={save} disabled={saving || !chatId}>
+            {saving ? 'Saving…' : '💾 Save to Backend'}
           </button>
         </div>
         {detectStatus && <div className="alerts-status">{detectStatus}</div>}
         {detectedChats.length > 0 && (
           <div className="alerts-detected">
             {detectedChats.map(chat => (
-              <button
-                key={chat.id}
-                type="button"
-                className="alerts-detected-row"
-                onClick={() => { setChatId(String(chat.id)); setDetectStatus('✅ Chat ID set.') }}
-              >
+              <button key={chat.id} type="button" className="alerts-detected-row"
+                      onClick={() => { setChatId(String(chat.id)); setDetectStatus('✅ Chat ID set.') }}>
                 <code>{chat.id}</code>
                 <span className="muted">
-                  {chat.type}{chat.name && ` — ${chat.name}`}{chat.username && ` (@${chat.username})`}
+                  {chat.type}{chat.name && ` — ${chat.name}`}
                 </span>
               </button>
             ))}
@@ -150,49 +214,40 @@ function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSu
       <div className="alerts-subs">
         <div className="alerts-subs-head">
           <span className="title">Subscribed Strategies</span>
-          <span className="muted">{subs.length} / {strategies.length} selected</span>
+          <span className="muted">{subs.length} / {strategies.length}</span>
         </div>
         <div className="alerts-subs-actions">
           <button onClick={subAll}>Select All</button>
           <button onClick={subNone}>Clear All</button>
+          <button className="primary" onClick={save} disabled={saving || !chatId}>
+            {saving ? '…' : '💾 Save'}
+          </button>
         </div>
         <div className="alerts-subs-list">
           {strategies.map(s => (
-            <label key={s.id} className={`alerts-sub-row ${subs.includes(s.id) ? 'on' : ''}`}>
-              <input
-                type="checkbox"
-                checked={subs.includes(s.id)}
-                onChange={() => toggle(s.id)}
-              />
+            <label key={s.id} className={`alerts-sub-row ${subIds.has(s.id) ? 'on' : ''}`}>
+              <input type="checkbox" checked={subIds.has(s.id)} onChange={() => toggle(s.id)} />
               <span className="alerts-sub-name">{s.name}</span>
             </label>
           ))}
         </div>
       </div>
 
-      {/* Debug panel — shows current state of each subscribed strategy so user
-          can see exactly why a notification did/didn't fire. */}
-      {subs.length > 0 && snapshot && (
+      {serverState?.subscriptions?.length > 0 && snapshot && (
         <div className="alerts-debug">
-          <div className="alerts-debug-title">🔍 Debug: subscribed strategies</div>
+          <div className="alerts-debug-title">🔍 Server-side state</div>
           <div className="alerts-debug-list">
-            {subs.map(id => {
-              const row = snapshot.strategies?.find(r => r.id === id)
-              if (!row) return (
-                <div key={id} className="alerts-debug-row">
-                  <span className="muted">{id}: not in snapshot yet</span>
-                </div>
-              )
-              const lastSeen = parseInt(localStorage.getItem(`btc.tg.lastSignal.${id}`) || '0', 10)
-              const wouldFire = row.signal !== 'HOLD' && row.last_signal_time && row.last_signal_time > lastSeen
+            {serverState.subscriptions.map(sub => {
+              const lastSeen = serverState.last_seen?.[sub.strategy_id] || 0
+              const row = snapshot.strategies?.find(r => r.id === sub.strategy_id)
               return (
-                <div key={id} className={`alerts-debug-row ${wouldFire ? 'fire' : ''}`}>
-                  <div className="adr-name">{row.name}</div>
+                <div key={sub.strategy_id} className="alerts-debug-row">
+                  <div className="adr-name">{row?.name || sub.strategy_id}</div>
                   <div className="adr-meta muted">
-                    signal: <b>{row.signal}</b>
-                    {' · '}last signal: <b>{timeAgo(row.last_signal_time)}</b>
-                    {' · '}last sent: <b>{lastSeen ? timeAgo(lastSeen) : 'never'}</b>
-                    {' · '}{wouldFire ? '🔔 will fire' : '— up to date'}
+                    last sent: <b>{lastSeen ? timeAgo(lastSeen) : 'never'}</b>
+                    {row?.last_signal_time && (
+                      <> · last signal: <b>{timeAgo(row.last_signal_time)}</b></>
+                    )}
                   </div>
                 </div>
               )
@@ -202,9 +257,8 @@ function AlertsTab({ strategies, token, setToken, chatId, setChatId, subs, setSu
       )}
 
       <div className="alerts-foot muted small">
-        💡 <b>Note:</b> Yeh notifications browser tab ke khulne par hi work karte hain.
-        Tab band karne pe alerts ruk jaate hain. Always-on alerts ke liye backend
-        worker chahiye — agar zarurat ho to bolo.
+        ✅ <b>Always-on:</b> notifications backend se aate hain. Browser band ya tab change kuch farak nahi padta.
+        Server every 60s polls every subscribed strategy.
       </div>
     </div>
   )

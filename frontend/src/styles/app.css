@@ -312,6 +312,46 @@ body {
 
 /* ---------- Alerts (Telegram notifications) ---------- */
 .alerts-tab { font-size: 12px; }
+.worker-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; margin-bottom: 10px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.worker-status.active {
+  background: rgba(0,212,163,0.12); border: 1px solid rgba(0,212,163,0.4); color: var(--text);
+}
+.worker-status.idle {
+  background: var(--bg); border: 1px solid var(--border); color: var(--muted);
+}
+.worker-status .ws-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); flex-shrink: 0;
+}
+.worker-status.active .ws-dot {
+  background: #00d4a3; box-shadow: 0 0 8px rgba(0,212,163,0.7);
+  animation: ws-pulse 2s infinite;
+}
+@keyframes ws-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.worker-error {
+  background: rgba(239,83,80,0.1);
+  border: 1px solid rgba(239,83,80,0.4);
+  color: #ff8a8a;
+  padding: 6px 10px; margin-bottom: 10px;
+  border-radius: 4px; font-size: 11px;
+}
+.alerts-checkbox {
+  display: flex !important; flex-direction: row !important;
+  align-items: center; gap: 8px;
+  font-size: 11px; color: var(--text); cursor: pointer;
+}
+.alerts-checkbox input { cursor: pointer; }
+.alerts-subs-actions .primary {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
 .alerts-help {
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 6px; padding: 8px 12px; margin-bottom: 12px;

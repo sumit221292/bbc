@@ -13,8 +13,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .alerts import alert_loop
 from .binance import stream_klines
 from .config import settings
+from .routers import alerts as alerts_router
 from .routers import market, outlook, strategy
 
 log = logging.getLogger("btc")
@@ -33,6 +35,20 @@ app.add_middleware(
 app.include_router(market.router)
 app.include_router(strategy.router)
 app.include_router(outlook.router)
+app.include_router(alerts_router.router)
+
+
+@app.on_event("startup")
+async def _start_alert_worker():
+    """Always-on Telegram notification worker."""
+    app.state.alert_task = asyncio.create_task(alert_loop())
+
+
+@app.on_event("shutdown")
+async def _stop_alert_worker():
+    task = getattr(app.state, "alert_task", None)
+    if task:
+        task.cancel()
 
 
 @app.get("/healthz")

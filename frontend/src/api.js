@@ -43,3 +43,30 @@ export async function getLeaderboard(symbol = 'BTCUSDT') {
   if (!r.ok) throw new Error(`leaderboard: ${r.status}`)
   return r.json()
 }
+
+export async function getAlertsConfig() {
+  const r = await fetch(`${BASE}/api/alerts/config`)
+  if (!r.ok) throw new Error(`alerts/config: ${r.status}`)
+  return r.json()
+}
+
+export async function setAlertsConfig(payload) {
+  const r = await fetch(`${BASE}/api/alerts/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!r.ok) throw new Error(`alerts/config: ${r.status}`)
+  return r.json()
+}
+
+export async function sendBackendTest({ token, chat_id }) {
+  const r = await fetch(`${BASE}/api/alerts/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, chat_id }),
+  })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) return { ok: false, description: data.detail || `HTTP ${r.status}` }
+  return { ok: true }
+}

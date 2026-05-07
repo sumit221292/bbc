@@ -11,7 +11,6 @@ import Resizer from './components/Resizer.jsx'
 import { getIndicators, getKlines, getLeaderboard, getOutlook, getStrategies, getStrategySnapshot, runStrategy } from './api.js'
 import { useLiveKlines } from './hooks/useLiveKlines.js'
 import { usePersistedState } from './hooks/usePersistedState.js'
-import { sendTelegram, formatSignalMessage } from './lib/telegram.js'
 
 export default function App() {
   const chartRef = useRef(null)
@@ -29,10 +28,8 @@ export default function App() {
   const [activeTab, setActiveTab] = usePersistedState('btc.tab', 'live')
   const [sidebarWidth, setSidebarWidth] = usePersistedState('btc.sidebarWidth', 380)
 
-  // Telegram alert settings — persist across refreshes.
-  const [tgToken, setTgToken] = usePersistedState('btc.tg.token', '')
-  const [tgChat, setTgChat] = usePersistedState('btc.tg.chat', '')
-  const [tgSubs, setTgSubs] = usePersistedState('btc.tg.subs', [])
+  // Telegram alerts now run on the backend (always-on); the AlertsTab
+  // talks directly to /api/alerts/config so we don't need state here.
 
   const [drawMode, setDrawMode] = useState('none')
   const [error, setError] = useState(null)
@@ -146,31 +143,9 @@ export default function App() {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [symbol, interval])
 
-  // Telegram alerts — when a subscribed strategy fires a NEW signal, send to bot.
-  // Tracks per-strategy "last seen signal time" in localStorage so a stale tab
-  // doesn't keep re-notifying the same trade. Only marks 'seen' on a successful
-  // Telegram response — failed sends will retry on the next poll.
-  useEffect(() => {
-    if (!snapshot || !tgToken || !tgChat || tgSubs.length === 0) return
-    for (const row of snapshot.strategies) {
-      if (!tgSubs.includes(row.id)) continue
-      if (row.signal === 'HOLD' || !row.last_signal_time) continue
-      const key = `btc.tg.lastSignal.${row.id}`
-      const lastSeen = parseInt(localStorage.getItem(key) || '0', 10)
-      if (row.last_signal_time > lastSeen) {
-        const msg = formatSignalMessage(row, snapshot.symbol)
-        console.info('[tg-alerts] sending', row.id, '@', row.last_signal_time, 'lastSeen', lastSeen)
-        sendTelegram(tgToken, tgChat, msg).then(res => {
-          if (res.ok) {
-            localStorage.setItem(key, String(row.last_signal_time))
-            console.info('[tg-alerts] sent', row.id)
-          } else {
-            console.error('[tg-alerts] FAILED', row.id, '-', res.description)
-          }
-        })
-      }
-    }
-  }, [snapshot, tgToken, tgChat, tgSubs])
+  // Telegram alerts: handled by the backend worker now (see app/alerts.py).
+  // The frontend's only job is the Alerts tab UI which POSTs config to
+  // /api/alerts/config.
 
   // Leaderboard — heavier (~5s), so only fetch when the Best tab is open.
   // Refresh every 5 minutes while the tab stays open.
@@ -301,9 +276,6 @@ export default function App() {
             {activeTab === 'alerts' && (
               <AlertsTab
                 strategies={strategies}
-                token={tgToken} setToken={setTgToken}
-                chatId={tgChat} setChatId={setTgChat}
-                subs={tgSubs} setSubs={setTgSubs}
                 snapshot={snapshot}
               />
             )}
