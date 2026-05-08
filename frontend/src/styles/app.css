@@ -324,6 +324,10 @@ body {
 .worker-status.idle {
   background: var(--bg); border: 1px solid var(--border); color: var(--muted);
 }
+.worker-status.paused {
+  background: rgba(243,156,18,0.12); border: 1px solid rgba(243,156,18,0.5); color: #f39c12;
+}
+.worker-status.paused .ws-dot { background: #f39c12; }
 .worker-status .ws-dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--muted); flex-shrink: 0;

@@ -121,21 +121,46 @@ function AlertsTab({ strategies, snapshot }) {
     ? timeAgo(serverState.last_poll)
     : 'never'
   const workerActive = serverState?.has_token && serverState?.enabled && (serverState?.subscriptions?.length ?? 0) > 0
+  const hasFullConfig = serverState?.has_token && serverState?.chat_id && (serverState?.subscriptions?.length ?? 0) > 0
+  const paused = hasFullConfig && !serverState?.enabled
 
   return (
     <div className="alerts-tab">
       <div className="panel-section-title">🔔 Telegram Alerts (Always-On)</div>
 
       {/* Worker status banner */}
-      <div className={`worker-status ${workerActive ? 'active' : 'idle'}`}>
+      <div className={`worker-status ${workerActive ? 'active' : paused ? 'paused' : 'idle'}`}>
         <span className="ws-dot" />
         <span>
           {workerActive
             ? <>Backend worker <b>ACTIVE</b> · last poll <b>{lastPollAge}</b> · browser band ho to bhi alerts aayenge</>
-            : <>Backend worker <b>idle</b> · token + chat_id + at least 1 subscription needed</>
+            : paused
+              ? <>⚠️ Config complete but worker is <b>PAUSED</b> — check the box below and Save to enable</>
+              : <>Backend worker <b>idle</b> · token + chat_id + at least 1 subscription needed</>
           }
         </span>
       </div>
+      {paused && (
+        <button
+          className="alerts-test"
+          onClick={async () => {
+            setEnabled(true)
+            // Save immediately with enabled=true
+            const cfg = { token: '', chat_id: chatId, enabled: true, subscriptions: subs }
+            try {
+              await setAlertsConfig(cfg)
+              const fresh = await getAlertsConfig()
+              setServerState(fresh)
+              setTestStatus('✅ Worker enabled')
+            } catch (e) {
+              setTestStatus('❌ ' + e)
+            }
+          }}
+          style={{ width: '100%', marginBottom: '10px' }}
+        >
+          ▶️ Enable Worker Now
+        </button>
+      )}
       {serverState?.last_error && (
         <div className="worker-error">⚠️ Last error: {serverState.last_error}</div>
       )}

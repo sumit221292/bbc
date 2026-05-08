@@ -63,8 +63,16 @@ async def update_alerts_config(payload: ConfigUpdate):
     if payload.token:
         cfg.token = payload.token
     cfg.chat_id = payload.chat_id
-    cfg.enabled = payload.enabled
     cfg.symbol = payload.symbol or "BTCUSDT"
+    # Auto-enable when the config is fully populated. Without this, on a
+    # fresh Railway deploy the alerts_config.json is reset (enabled=false)
+    # and the frontend's first GET propagates that 'false' back into the
+    # form -- the user clicks Save thinking they're enabling, but they're
+    # silently saving a paused worker. Now: if the user has token + chat_id
+    # + at least one subscription, we force enabled=True. To pause, they
+    # send subs=[] or call the (future) /pause endpoint.
+    has_full = bool(cfg.token and payload.chat_id and payload.subscriptions)
+    cfg.enabled = payload.enabled if not has_full else True
 
     now = int(time.time())
     new_ids = {s.strategy_id for s in payload.subscriptions}
