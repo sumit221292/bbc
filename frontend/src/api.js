@@ -70,3 +70,28 @@ export async function sendBackendTest({ token, chat_id }) {
   if (!r.ok) return { ok: false, description: data.detail || `HTTP ${r.status}` }
   return { ok: true }
 }
+
+export async function setAutoTrade(payload) {
+  const r = await fetch(`${BASE}/api/alerts/auto`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`)
+  return data
+}
+
+export async function testBinanceCredentials({ api_key, api_secret }) {
+  const r = await fetch(`${BASE}/api/alerts/auto/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key, api_secret }),
+  })
+  return r.json().catch(() => ({ ok: false, message: 'parse error' }))
+}
+
+export async function killAutoTrade() {
+  const r = await fetch(`${BASE}/api/alerts/auto/kill`, { method: 'POST' })
+  return r.json().catch(() => ({ ok: false }))
+}

@@ -21,7 +21,13 @@ from typing import Optional
 import httpx
 from pydantic import BaseModel, Field
 
+from datetime import datetime, timezone
+
 from .binance import fetch_klines
+from .binance_trade import (
+    cancel_all_open_orders, compute_quantity, get_exchange_info,
+    place_market, place_oco,
+)
 from .multi_tf import MTFContext
 from .smc_mtf import SMCMTFContext
 from .strategies import (
@@ -44,6 +50,32 @@ class Subscription(BaseModel):
     interval: Optional[str] = None  # None = use strategy default
 
 
+class AutoTradeConfig(BaseModel):
+    """Live auto-execution settings — every safety knob defaults to OFF/conservative."""
+    enabled: bool = False             # master switch (default OFF)
+    api_key: str = ""
+    api_secret: str = ""
+    capital_usd: float = 100.0        # paper-low default
+    risk_pct: float = 0.01            # 1% per trade (hard-capped to 0.05 below)
+    max_position_usd: float = 500.0   # hard cap per trade
+    max_trades_per_day: int = 5
+    max_daily_loss_pct: float = 0.05  # halt if -5% intraday
+    confirmation: str = ""            # must equal CONFIRM_PHRASE to enable
+    # Per-strategy whitelist: only these strategy IDs are allowed to auto-trade.
+    # Empty list = NO auto-trade even if enabled.
+    allowed_strategies: list[str] = Field(default_factory=list)
+    # Daily counters (reset at UTC midnight by alert_loop)
+    trades_today: int = 0
+    loss_today_pct: float = 0.0
+    day_started: int = 0              # UTC midnight of the current trade day
+    last_trade_error: str = ""
+    halted_reason: str = ""           # populated if circuit breaker fired
+
+
+CONFIRM_PHRASE = "I UNDERSTAND THE RISKS"
+MAX_RISK_PCT = 0.05  # absolute cap regardless of user input
+
+
 class AlertConfig(BaseModel):
     token: str = ""
     chat_id: str = ""
@@ -54,6 +86,7 @@ class AlertConfig(BaseModel):
     last_seen: dict[str, int] = Field(default_factory=dict)
     last_poll: int = 0
     last_error: str = ""
+    auto_trade: AutoTradeConfig = Field(default_factory=AutoTradeConfig)
 
 
 def _default_interval(strategy_id: str) -> str:
@@ -205,6 +238,108 @@ async def _evaluate_subscription(sub: Subscription, symbol: str):
     return (open_signals[-1] if open_signals else None), name
 
 
+def _utc_midnight(ts: int) -> int:
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(midnight.timestamp())
+
+
+async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str | None:
+    """Place a real Binance order for this signal if all safety conditions pass.
+    Returns a human-readable status string for the Telegram message footer,
+    or None if auto-trade is not active for this signal."""
+    at = cfg.auto_trade
+
+    # Hard gates — fail closed.
+    if not at.enabled:
+        return None
+    if at.confirmation != CONFIRM_PHRASE:
+        return "auto-trade: skipped (confirmation phrase missing)"
+    if not at.api_key or not at.api_secret:
+        return "auto-trade: skipped (no API key)"
+    if sub.strategy_id not in at.allowed_strategies:
+        return f"auto-trade: skipped ({sub.strategy_id} not whitelisted)"
+    if at.halted_reason:
+        return f"auto-trade: HALTED — {at.halted_reason}"
+
+    # Daily counters
+    now = int(time.time())
+    today_start = _utc_midnight(now)
+    if at.day_started != today_start:
+        at.trades_today = 0
+        at.loss_today_pct = 0.0
+        at.day_started = today_start
+
+    if at.trades_today >= at.max_trades_per_day:
+        return f"auto-trade: skipped (daily cap {at.max_trades_per_day} hit)"
+    if at.loss_today_pct >= at.max_daily_loss_pct:
+        at.halted_reason = f"daily loss limit -{at.loss_today_pct*100:.2f}% hit"
+        return f"auto-trade: HALTED — {at.halted_reason}"
+    if sig.entry is None or sig.stop_loss is None or sig.target is None:
+        return "auto-trade: skipped (incomplete signal levels)"
+
+    # Sizing
+    risk = min(at.risk_pct, MAX_RISK_PCT)
+    try:
+        info = await get_exchange_info(cfg.symbol)
+    except Exception as e:
+        at.last_trade_error = f"exchange info failed: {e}"
+        return f"auto-trade: skipped (exchange info: {e})"
+
+    qty, msg = compute_quantity(
+        capital_usd=at.capital_usd, risk_pct=risk,
+        entry=sig.entry, stop=sig.stop_loss,
+        step_size=info["step_size"], min_qty=info["min_qty"],
+        min_notional=info["min_notional"],
+        max_position_usd=at.max_position_usd,
+    )
+    if qty <= 0:
+        return f"auto-trade: skipped ({msg})"
+
+    # Place entry
+    entry_side = "BUY" if sig.type == "BUY" else "SELL"
+    exit_side = "SELL" if sig.type == "BUY" else "BUY"
+    try:
+        log.info("[AUTO-TRADE] placing %s %s qty=%s (%s)",
+                 entry_side, cfg.symbol, qty, msg)
+        entry_resp = await place_market(at.api_key, at.api_secret, cfg.symbol, entry_side, qty)
+    except Exception as e:
+        at.last_trade_error = f"entry failed: {e}"
+        log.error("[AUTO-TRADE] entry failed: %s", e)
+        return f"auto-trade: ENTRY FAILED — {e}"
+
+    # Place OCO bracket exit (stop + target). If this fails we have a naked
+    # position — log loudly and Telegram-warn the user.
+    tick = info["tick_size"]
+    # Stop-limit fires a tick or two beyond stop_price so it actually fills.
+    if entry_side == "BUY":
+        stop_limit = sig.stop_loss - tick * 2
+    else:
+        stop_limit = sig.stop_loss + tick * 2
+    try:
+        oco_resp = await place_oco(
+            at.api_key, at.api_secret, cfg.symbol, exit_side, qty,
+            take_profit_price=sig.target,
+            stop_price=sig.stop_loss,
+            stop_limit_price=stop_limit,
+        )
+    except Exception as e:
+        at.last_trade_error = f"OCO failed: {e}"
+        log.error("[AUTO-TRADE] OCO failed — position is UNPROTECTED: %s", e)
+        return (
+            f"⚠️ auto-trade: ENTRY FILLED but OCO failed ({e}). "
+            "Position is UNPROTECTED. Place manual stop+target NOW."
+        )
+
+    at.trades_today += 1
+    at.last_trade_error = ""
+    fill_price = float(entry_resp.get("fills", [{}])[0].get("price", sig.entry))
+    return (
+        f"✅ auto-trade: filled {entry_side} {qty} @ ${fill_price:.2f} "
+        f"(daily {at.trades_today}/{at.max_trades_per_day})"
+    )
+
+
 async def alert_loop():
     """Background task, started from main.py on startup."""
     log.info("alert worker started; polling every %ss", POLL_SECONDS)
@@ -238,7 +373,13 @@ async def alert_loop():
                                 sub.strategy_id, latest.type, eff_type,
                                 latest.entry, latest.stop_loss, latest.target,
                             )
+
+                        # Try auto-execution BEFORE the Telegram message so
+                        # the message can reflect the outcome.
+                        trade_status = await _maybe_auto_execute(cfg, sub, latest)
                         msg = _format_signal(cfg.symbol, name, latest)
+                        if trade_status:
+                            msg = msg + "\n\n" + trade_status
                         ok, err = await send_telegram(cfg.token, cfg.chat_id, msg)
                         if ok:
                             cfg.last_seen[sub.strategy_id] = latest.time

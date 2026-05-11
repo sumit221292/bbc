@@ -472,6 +472,47 @@ body {
   border-radius: 4px; line-height: 1.4;
 }
 
+/* ---------- Auto-trade panel (DANGER ZONE) ---------- */
+.auto-trade {
+  margin-top: 14px; padding-top: 12px;
+  border-top: 2px dashed rgba(239,83,80,0.4);
+}
+.auto-banner {
+  padding: 10px 12px; border-radius: 6px;
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+.auto-banner.idle {
+  background: var(--bg); border: 1px solid var(--border); color: var(--muted);
+}
+.auto-banner.live {
+  background: rgba(239,83,80,0.15); border: 1px solid rgba(239,83,80,0.5);
+  color: #ff8a8a;
+  animation: pulse-warn 2s infinite;
+}
+@keyframes pulse-warn {
+  0%, 100% { background: rgba(239,83,80,0.15); }
+  50% { background: rgba(239,83,80,0.28); }
+}
+.auto-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px;
+  margin: 8px 0;
+}
+.auto-strategies { margin-top: 8px; }
+.auto-strategies .title {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); font-weight: 600; margin-bottom: 6px;
+}
+.auto-kill {
+  background: #ef5350; color: #fff;
+  border: none; border-radius: 4px;
+  padding: 7px 14px; cursor: pointer;
+  font-weight: 800; font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.auto-kill:hover:not(:disabled) { background: #d63b39; }
+.auto-kill:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .alerts-debug {
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 6px; padding: 12px; margin-bottom: 10px;

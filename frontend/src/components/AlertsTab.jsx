@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 import { getAlertsConfig, sendBackendTest, setAlertsConfig } from '../api.js'
 import { getTelegramUpdates } from '../lib/telegram.js'
+import AutoTradePanel from './AutoTradePanel.jsx'
 
 function timeAgo(ts) {
   if (!ts) return 'never'
@@ -280,6 +281,14 @@ function AlertsTab({ strategies, snapshot }) {
           </div>
         </div>
       )}
+
+      <AutoTradePanel
+        strategies={strategies}
+        serverState={serverState}
+        onConfigChange={() => {
+          getAlertsConfig().then(setServerState).catch(() => {})
+        }}
+      />
 
       <div className="alerts-foot muted small">
         ✅ <b>Always-on:</b> notifications backend se aate hain. Browser band ya tab change kuch farak nahi padta.
