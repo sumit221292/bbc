@@ -77,6 +77,7 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
 
   const isLive = at?.enabled
   const phraseMatches = confirmation === CONFIRM_PHRASE
+  const pos = at?.current_position
 
   return (
     <div className="auto-trade">
@@ -86,6 +87,29 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
           : <>⚙️ Auto-trade idle. Enable below ONLY after paper-trading and reading the warnings.</>
         }
       </div>
+
+      {pos && (
+        <div className="position-card">
+          <div className="position-head">
+            📌 Open position
+            <span className={`badge sm ${pos.side === 'LONG' ? 'buy' : 'sell'}`}>{pos.side}</span>
+          </div>
+          <div className="position-detail">
+            <span><b>{pos.qty.toFixed(6)}</b> BTC</span>
+            <span className="muted">·</span>
+            <span>Entry <b>${pos.entry.toFixed(2)}</b></span>
+            <span className="muted">·</span>
+            <span>Stop <b className="neg">${pos.stop.toFixed(2)}</b></span>
+            <span className="muted">·</span>
+            <span>Target <b className="pos">${pos.target.toFixed(2)}</b></span>
+            <span className="muted">·</span>
+            <span className="muted">opened by {pos.strategy_id}</span>
+          </div>
+          <div className="muted small position-foot">
+            Same-direction signals will be SKIPPED. Opposite-direction signals will close this position before opening the new one.
+          </div>
+        </div>
+      )}
       {at?.halted_reason && (
         <div className="worker-error">⛔ HALTED: {at.halted_reason}</div>
       )}

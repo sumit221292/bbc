@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from .binance import fetch_klines
 from .binance_trade import (
-    cancel_all_open_orders, compute_quantity, get_exchange_info,
+    cancel_all_open_orders, compute_quantity, get_balance, get_exchange_info,
     place_market, place_oco,
 )
 from .multi_tf import MTFContext
@@ -50,6 +50,17 @@ class Subscription(BaseModel):
     interval: Optional[str] = None  # None = use strategy default
 
 
+class OpenPosition(BaseModel):
+    """A single live position. Only one per symbol at a time (no averaging)."""
+    side: str                  # 'LONG' or 'SHORT'
+    qty: float
+    entry: float
+    stop: float
+    target: float
+    strategy_id: str
+    opened_at: int             # epoch seconds
+
+
 class AutoTradeConfig(BaseModel):
     """Live auto-execution settings — every safety knob defaults to OFF/conservative."""
     enabled: bool = False             # master switch (default OFF)
@@ -64,6 +75,8 @@ class AutoTradeConfig(BaseModel):
     # Per-strategy whitelist: only these strategy IDs are allowed to auto-trade.
     # Empty list = NO auto-trade even if enabled.
     allowed_strategies: list[str] = Field(default_factory=list)
+    # Smart trade manager state
+    current_position: Optional[OpenPosition] = None
     # Daily counters (reset at UTC midnight by alert_loop)
     trades_today: int = 0
     loss_today_pct: float = 0.0
@@ -244,10 +257,60 @@ def _utc_midnight(ts: int) -> int:
     return int(midnight.timestamp())
 
 
+async def _sync_position_state(at: AutoTradeConfig, symbol: str) -> None:
+    """Detect natural OCO fills (stop or target hit by the market) by reading
+    the actual BTC balance. If we recorded a LONG but the wallet has no base
+    asset left, the bracket fired -- clear the local state so the next signal
+    can act fresh."""
+    if at.current_position is None:
+        return
+    if not at.api_key or not at.api_secret:
+        return
+    base_asset = symbol.replace("USDT", "").replace("BUSD", "").replace("USDC", "")
+    try:
+        bal = await get_balance(at.api_key, at.api_secret, base_asset)
+    except Exception as e:
+        log.warning("position sync failed: %s", e)
+        return
+    # Use 50% of recorded qty as threshold so partial fills don't fool us.
+    if bal < at.current_position.qty * 0.5:
+        log.info("[AUTO-TRADE] position cleared (balance %.6f < half of recorded %.6f)",
+                 bal, at.current_position.qty)
+        at.current_position = None
+
+
+async def _close_position(at: AutoTradeConfig, symbol: str) -> tuple[bool, str]:
+    """Cancel any open OCO brackets then market-close the current position.
+    Returns (ok, message)."""
+    pos = at.current_position
+    if pos is None:
+        return True, "no position to close"
+    try:
+        await cancel_all_open_orders(at.api_key, at.api_secret, symbol)
+    except Exception as e:
+        log.warning("[AUTO-TRADE] cancel-all before close failed: %s", e)
+    close_side = "SELL" if pos.side == "LONG" else "BUY"
+    try:
+        await place_market(at.api_key, at.api_secret, symbol, close_side, pos.qty)
+    except Exception as e:
+        at.last_trade_error = f"close failed: {e}"
+        return False, f"close failed: {e}"
+    at.current_position = None
+    return True, f"closed {pos.side} {pos.qty:.6f}"
+
+
 async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str | None:
-    """Place a real Binance order for this signal if all safety conditions pass.
-    Returns a human-readable status string for the Telegram message footer,
-    or None if auto-trade is not active for this signal."""
+    """Smart manager — handles position state to avoid averaging and to
+    reverse cleanly on opposite signals.
+
+    Spot rules (current code path):
+      no position + BUY signal   -> open LONG
+      no position + SELL signal  -> skip (Spot can't short)
+      LONG       + BUY signal    -> skip (no averaging)
+      LONG       + SELL signal   -> close LONG, leave flat
+
+    Telegram message reflects whichever path was taken.
+    """
     at = cfg.auto_trade
 
     # Hard gates — fail closed.
@@ -261,6 +324,9 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
         return f"auto-trade: skipped ({sub.strategy_id} not whitelisted)"
     if at.halted_reason:
         return f"auto-trade: HALTED — {at.halted_reason}"
+
+    # First: clean up stale position state by checking the wallet
+    await _sync_position_state(at, cfg.symbol)
 
     # Daily counters
     now = int(time.time())
@@ -278,15 +344,39 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
     if sig.entry is None or sig.stop_loss is None or sig.target is None:
         return "auto-trade: skipped (incomplete signal levels)"
 
-    # Sizing
+    new_side = "LONG" if sig.type == "BUY" else "SHORT"
+    pos = at.current_position
+
+    # === Smart position management ===
+    # Case 1: same direction as existing position -> NO AVERAGING
+    if pos is not None and pos.side == new_side:
+        return (f"auto-trade: skipped (already {pos.side} from "
+                f"{pos.strategy_id}; no averaging)")
+
+    # Case 2: opposite direction -> close existing first
+    closed_msg = ""
+    if pos is not None and pos.side != new_side:
+        ok, msg = await _close_position(at, cfg.symbol)
+        if not ok:
+            return f"auto-trade: REVERSE-CLOSE FAILED — {msg}"
+        closed_msg = f"closed prior {pos.side} ({pos.strategy_id}) ✂️ "
+        # After closing, the next-step continues below to open the new direction.
+
+    # Case 3: new signal direction
+    # On Spot you cannot short -- a SELL signal with no LONG is a no-op.
+    if new_side == "SHORT":
+        return (f"{closed_msg}auto-trade: SELL signal with no LONG to close "
+                "(Spot can't short).")
+
+    # Sizing for the new entry
     risk = min(at.risk_pct, MAX_RISK_PCT)
     try:
         info = await get_exchange_info(cfg.symbol)
     except Exception as e:
         at.last_trade_error = f"exchange info failed: {e}"
-        return f"auto-trade: skipped (exchange info: {e})"
+        return f"{closed_msg}auto-trade: skipped (exchange info: {e})"
 
-    qty, msg = compute_quantity(
+    qty, sizing_msg = compute_quantity(
         capital_usd=at.capital_usd, risk_pct=risk,
         entry=sig.entry, stop=sig.stop_loss,
         step_size=info["step_size"], min_qty=info["min_qty"],
@@ -294,31 +384,24 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
         max_position_usd=at.max_position_usd,
     )
     if qty <= 0:
-        return f"auto-trade: skipped ({msg})"
+        return f"{closed_msg}auto-trade: skipped ({sizing_msg})"
 
-    # Place entry
-    entry_side = "BUY" if sig.type == "BUY" else "SELL"
-    exit_side = "SELL" if sig.type == "BUY" else "BUY"
+    # Place the entry market order (BUY for LONG)
     try:
-        log.info("[AUTO-TRADE] placing %s %s qty=%s (%s)",
-                 entry_side, cfg.symbol, qty, msg)
-        entry_resp = await place_market(at.api_key, at.api_secret, cfg.symbol, entry_side, qty)
+        log.info("[AUTO-TRADE] placing BUY %s qty=%s (%s)",
+                 cfg.symbol, qty, sizing_msg)
+        entry_resp = await place_market(at.api_key, at.api_secret, cfg.symbol, "BUY", qty)
     except Exception as e:
         at.last_trade_error = f"entry failed: {e}"
         log.error("[AUTO-TRADE] entry failed: %s", e)
-        return f"auto-trade: ENTRY FAILED — {e}"
+        return f"{closed_msg}auto-trade: ENTRY FAILED — {e}"
 
-    # Place OCO bracket exit (stop + target). If this fails we have a naked
-    # position — log loudly and Telegram-warn the user.
+    # Place OCO bracket exit (SELL stop + SELL target)
     tick = info["tick_size"]
-    # Stop-limit fires a tick or two beyond stop_price so it actually fills.
-    if entry_side == "BUY":
-        stop_limit = sig.stop_loss - tick * 2
-    else:
-        stop_limit = sig.stop_loss + tick * 2
+    stop_limit = sig.stop_loss - tick * 2  # below stop_price for BUY long exit
     try:
-        oco_resp = await place_oco(
-            at.api_key, at.api_secret, cfg.symbol, exit_side, qty,
+        await place_oco(
+            at.api_key, at.api_secret, cfg.symbol, "SELL", qty,
             take_profit_price=sig.target,
             stop_price=sig.stop_loss,
             stop_limit_price=stop_limit,
@@ -326,16 +409,29 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
     except Exception as e:
         at.last_trade_error = f"OCO failed: {e}"
         log.error("[AUTO-TRADE] OCO failed — position is UNPROTECTED: %s", e)
+        # Record the position anyway so manager doesn't try to open another
+        at.current_position = OpenPosition(
+            side="LONG", qty=qty, entry=sig.entry,
+            stop=sig.stop_loss, target=sig.target,
+            strategy_id=sub.strategy_id, opened_at=now,
+        )
+        at.trades_today += 1
         return (
-            f"⚠️ auto-trade: ENTRY FILLED but OCO failed ({e}). "
+            f"{closed_msg}⚠️ auto-trade: ENTRY FILLED but OCO failed ({e}). "
             "Position is UNPROTECTED. Place manual stop+target NOW."
         )
 
+    # All good — store position
+    at.current_position = OpenPosition(
+        side="LONG", qty=qty, entry=sig.entry,
+        stop=sig.stop_loss, target=sig.target,
+        strategy_id=sub.strategy_id, opened_at=now,
+    )
     at.trades_today += 1
     at.last_trade_error = ""
     fill_price = float(entry_resp.get("fills", [{}])[0].get("price", sig.entry))
     return (
-        f"✅ auto-trade: filled {entry_side} {qty} @ ${fill_price:.2f} "
+        f"{closed_msg}✅ auto-trade: filled BUY {qty:.6f} @ ${fill_price:.2f} "
         f"(daily {at.trades_today}/{at.max_trades_per_day})"
     )
 

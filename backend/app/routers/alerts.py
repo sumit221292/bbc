@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from ..alerts import (
     AlertConfig, AutoTradeConfig, CONFIRM_PHRASE, MAX_RISK_PCT,
-    Subscription, load_config, save_config, send_telegram,
+    OpenPosition, Subscription, load_config, save_config, send_telegram,
 )
 from ..binance_trade import cancel_all_open_orders, test_credentials
 
@@ -38,6 +38,7 @@ class AutoTradeView(BaseModel):
     max_trades_per_day: int
     max_daily_loss_pct: float
     allowed_strategies: list[str]
+    current_position: OpenPosition | None
     trades_today: int
     loss_today_pct: float
     last_trade_error: str
@@ -69,6 +70,7 @@ def _auto_view(at: AutoTradeConfig) -> AutoTradeView:
         max_trades_per_day=at.max_trades_per_day,
         max_daily_loss_pct=at.max_daily_loss_pct,
         allowed_strategies=at.allowed_strategies,
+        current_position=at.current_position,
         trades_today=at.trades_today,
         loss_today_pct=at.loss_today_pct,
         last_trade_error=at.last_trade_error,

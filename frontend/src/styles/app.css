@@ -510,6 +510,25 @@ body {
   font-weight: 800; font-size: 12px;
   letter-spacing: 0.04em;
 }
+.position-card {
+  background: rgba(52,152,219,0.10);
+  border: 1px solid rgba(52,152,219,0.4);
+  border-radius: 6px;
+  padding: 10px 12px; margin-bottom: 10px;
+}
+.position-head {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 700; font-size: 12px;
+  margin-bottom: 6px;
+}
+.position-detail {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  margin-bottom: 6px;
+}
+.position-detail b.pos { color: var(--buy); }
+.position-detail b.neg { color: var(--sell); }
+.position-foot { font-size: 10px; }
 .auto-kill:hover:not(:disabled) { background: #d63b39; }
 .auto-kill:disabled { opacity: 0.5; cursor: not-allowed; }
 
