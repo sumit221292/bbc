@@ -128,6 +128,7 @@ _CATEGORIES: dict[str, str] = {
     "smc_trend_liq": "Smart Money",
     "champion": "Champion",
     "best": "Selective",
+    "price_action": "Price Action",
     "smc_momentum": "Smart Money",
     "trend_following": "Trend",
     "day_trading": "Trend",
