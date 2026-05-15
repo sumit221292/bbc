@@ -1,0 +1,522 @@
+//@version=6
+// =============================================================================
+// SMC Phase 1 — Market Structure + Order Blocks + Fair Value Gaps
+//
+// Core Smart Money Concepts toolkit. Phase 1 covers:
+//
+//   1. MARKET STRUCTURE
+//      - Swing pivot detection (configurable left/right strength)
+//      - HH / HL / LH / LL classification with labels
+//      - BOS (Break Of Structure)  -> continuation in current trend
+//      - CHOCH (Change Of Character) -> first break of opposite extreme
+//
+//   2. ORDER BLOCKS
+//      - Bullish/Bearish OB anchored to the last opposite candle before
+//        a displacement that triggers a BOS / CHOCH
+//      - Auto-invalidate on close beyond the block
+//      - Mitigated tag when price re-enters but does not break
+//      - Capped active count so the chart cannot blow the object limit
+//
+//   3. FAIR VALUE GAP (FVG)
+//      - Classic 3-candle imbalance (high[2] vs low[0] / low[2] vs high[0])
+//      - Min size filter as a % of ATR so chop does not flood the chart
+//      - Tracks fills (partial reduces, full removes)
+//      - Extends right until filled
+//
+// Alerts ready for BOS / CHOCH / OB touch / FVG fill / new OB / new FVG.
+//
+// Pine v6.  Phase 2 (planned): Liquidity, MTF, sessions, confluence signal.
+// =============================================================================
+indicator("SMC Phase 1 — MS + OB + FVG", overlay=true,
+     max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+
+// ----- Market Structure -----
+GRP_MS         = "Market Structure"
+MS_ENABLE      = input.bool(true,  "Enable",                         group=GRP_MS)
+PIVOT_LEFT     = input.int(5,      "Pivot lookback (left)",  minval=1, group=GRP_MS)
+PIVOT_RIGHT    = input.int(5,      "Pivot lookback (right)", minval=1, group=GRP_MS)
+MS_SHOW_LABELS = input.bool(true,  "Show HH / HL / LH / LL labels",  group=GRP_MS)
+MS_SHOW_BOS    = input.bool(true,  "Draw BOS lines",                  group=GRP_MS)
+MS_SHOW_CHOCH  = input.bool(true,  "Draw CHOCH lines",                group=GRP_MS)
+MS_BULL_COLOR  = input.color(color.new(#26a69a, 0), "Bullish color",  group=GRP_MS)
+MS_BEAR_COLOR  = input.color(color.new(#ef5350, 0), "Bearish color",  group=GRP_MS)
+
+// ----- Order Blocks -----
+GRP_OB         = "Order Blocks"
+OB_ENABLE      = input.bool(true,  "Enable",                         group=GRP_OB)
+OB_MAX_ACTIVE  = input.int(8,      "Max active OBs per side", minval=1, maxval=20, group=GRP_OB)
+OB_LOOKBACK    = input.int(10,     "Lookback bars from BOS to find OB candle", minval=2, maxval=30, group=GRP_OB)
+OB_BULL_COLOR  = input.color(color.new(#26a69a, 80), "Bullish OB",   group=GRP_OB)
+OB_BEAR_COLOR  = input.color(color.new(#ef5350, 80), "Bearish OB",   group=GRP_OB)
+OB_MIT_OPACITY = input.int(94,     "Mitigated OB transparency", minval=70, maxval=99, group=GRP_OB)
+OB_EXTEND_BARS = input.int(50,     "Extend OB right by N bars", minval=10, maxval=200, group=GRP_OB)
+
+// ----- FVG -----
+GRP_FVG        = "Fair Value Gaps"
+FVG_ENABLE     = input.bool(true,  "Enable",                         group=GRP_FVG)
+FVG_MAX_ACTIVE = input.int(10,     "Max active FVGs per side", minval=1, maxval=30, group=GRP_FVG)
+FVG_MIN_ATR    = input.float(0.15, "Min FVG height as ATR multiple", minval=0.0, step=0.05, group=GRP_FVG)
+FVG_BULL_COLOR = input.color(color.new(#26a69a, 75), "Bullish FVG",  group=GRP_FVG)
+FVG_BEAR_COLOR = input.color(color.new(#ef5350, 75), "Bearish FVG",  group=GRP_FVG)
+FVG_EXTEND_BARS = input.int(40,    "Extend FVG right by N bars", minval=10, maxval=200, group=GRP_FVG)
+
+// ----- Display -----
+GRP_DISP       = "Display"
+LABEL_SIZE_STR = input.string("small", "Label size",
+     options=["tiny", "small", "normal", "large"], group=GRP_DISP)
+
+label_size = LABEL_SIZE_STR == "tiny"   ? size.tiny :
+             LABEL_SIZE_STR == "small"  ? size.small :
+             LABEL_SIZE_STR == "normal" ? size.normal : size.large
+
+// =============================================================================
+// SHARED HELPERS
+// =============================================================================
+
+// ATR for FVG size filter. Use a stable period so users do not need to tune.
+atr14 = ta.atr(14)
+
+// Helper: convert a `right`-shifted pivot back to its actual bar index.
+// ta.pivothigh / ta.pivotlow return on the CURRENT bar but the pivot itself
+// is `PIVOT_RIGHT` bars in the past.
+pivot_bar(pivot_right) =>
+    bar_index - pivot_right
+
+// =============================================================================
+// MODULE 1: MARKET STRUCTURE
+//   - Detect swing highs/lows
+//   - Classify HH / LH / HL / LL
+//   - Fire BOS on continuation, CHOCH on first opposite break
+// =============================================================================
+
+var float last_swing_high      = na
+var int   last_swing_high_bar  = na
+var float prev_swing_high      = na
+var float last_swing_low       = na
+var int   last_swing_low_bar   = na
+var float prev_swing_low       = na
+var int   ms_trend             = 0   // +1 bull, -1 bear, 0 unknown
+
+ph = ta.pivothigh(PIVOT_LEFT, PIVOT_RIGHT)
+pl = ta.pivotlow(PIVOT_LEFT, PIVOT_RIGHT)
+
+bos_bull = false
+bos_bear = false
+choch_bull = false
+choch_bear = false
+
+if MS_ENABLE and not na(ph)
+    pbar = pivot_bar(PIVOT_RIGHT)
+    string ms_tag = ""
+    if na(last_swing_high)
+        ms_tag := "H"
+    else if ph > last_swing_high
+        ms_tag := "HH"
+    else
+        ms_tag := "LH"
+
+    if MS_SHOW_LABELS
+        label.new(pbar, ph, ms_tag, style=label.style_label_down,
+             color=color.new(MS_BULL_COLOR, 70), textcolor=color.white,
+             size=label_size)
+
+    prev_swing_high := last_swing_high
+    last_swing_high := ph
+    last_swing_high_bar := pbar
+
+if MS_ENABLE and not na(pl)
+    pbar = pivot_bar(PIVOT_RIGHT)
+    string ms_tag = ""
+    if na(last_swing_low)
+        ms_tag := "L"
+    else if pl < last_swing_low
+        ms_tag := "LL"
+    else
+        ms_tag := "HL"
+
+    if MS_SHOW_LABELS
+        label.new(pbar, pl, ms_tag, style=label.style_label_up,
+             color=color.new(MS_BEAR_COLOR, 70), textcolor=color.white,
+             size=label_size)
+
+    prev_swing_low := last_swing_low
+    last_swing_low := pl
+    last_swing_low_bar := pbar
+
+// BOS / CHOCH detection on close. Break = current close pierces the most
+// recent opposite-side swing reference. CHOCH is the FIRST such break against
+// the prevailing trend; subsequent breaks in the new direction are BOS.
+if MS_ENABLE and not na(last_swing_high) and close > last_swing_high and high[1] <= last_swing_high
+    if ms_trend == -1
+        choch_bull := true
+        ms_trend := 1
+        if MS_SHOW_CHOCH
+            line.new(last_swing_high_bar, last_swing_high, bar_index, last_swing_high,
+                 color=MS_BULL_COLOR, style=line.style_dashed, width=1)
+            label.new(bar_index, last_swing_high, "CHOCH",
+                 style=label.style_label_down, color=MS_BULL_COLOR,
+                 textcolor=color.white, size=label_size)
+    else
+        bos_bull := true
+        ms_trend := 1
+        if MS_SHOW_BOS
+            line.new(last_swing_high_bar, last_swing_high, bar_index, last_swing_high,
+                 color=MS_BULL_COLOR, style=line.style_solid, width=1)
+            label.new(bar_index, last_swing_high, "BOS",
+                 style=label.style_label_down, color=MS_BULL_COLOR,
+                 textcolor=color.white, size=label_size)
+
+if MS_ENABLE and not na(last_swing_low) and close < last_swing_low and low[1] >= last_swing_low
+    if ms_trend == 1
+        choch_bear := true
+        ms_trend := -1
+        if MS_SHOW_CHOCH
+            line.new(last_swing_low_bar, last_swing_low, bar_index, last_swing_low,
+                 color=MS_BEAR_COLOR, style=line.style_dashed, width=1)
+            label.new(bar_index, last_swing_low, "CHOCH",
+                 style=label.style_label_up, color=MS_BEAR_COLOR,
+                 textcolor=color.white, size=label_size)
+    else
+        bos_bear := true
+        ms_trend := -1
+        if MS_SHOW_BOS
+            line.new(last_swing_low_bar, last_swing_low, bar_index, last_swing_low,
+                 color=MS_BEAR_COLOR, style=line.style_solid, width=1)
+            label.new(bar_index, last_swing_low, "BOS",
+                 style=label.style_label_up, color=MS_BEAR_COLOR,
+                 textcolor=color.white, size=label_size)
+
+// =============================================================================
+// MODULE 2: ORDER BLOCKS
+//   On a fresh BOS/CHOCH, look back up to OB_LOOKBACK bars for the most
+//   recent opposite-coloured candle. Anchor an OB to its body. Track it as
+//   long as price has not closed beyond the far edge of the body.
+// =============================================================================
+
+// Track per-OB metadata in parallel arrays. Using arrays of box + arrays of
+// the anchor price keeps the per-bar memory footprint small.
+var array<box>   bull_ob_boxes  = array.new<box>()
+var array<float> bull_ob_tops   = array.new<float>()
+var array<float> bull_ob_bots   = array.new<float>()
+var array<bool>  bull_ob_mit    = array.new<bool>()
+
+var array<box>   bear_ob_boxes  = array.new<box>()
+var array<float> bear_ob_tops   = array.new<float>()
+var array<float> bear_ob_bots   = array.new<float>()
+var array<bool>  bear_ob_mit    = array.new<bool>()
+
+// Find the most recent candle of `bear` colour within the lookback window
+// before the current bar. Returns the offset (>=0) or -1 if none.
+find_recent_bear_offset() =>
+    int found = -1
+    for j = 1 to OB_LOOKBACK
+        if close[j] < open[j]
+            found := j
+            break
+    found
+
+find_recent_bull_offset() =>
+    int found = -1
+    for j = 1 to OB_LOOKBACK
+        if close[j] > open[j]
+            found := j
+            break
+    found
+
+// On a bullish break: the OB is the body of the most recent BEAR candle.
+new_bull_ob = OB_ENABLE and (bos_bull or choch_bull)
+new_bear_ob = OB_ENABLE and (bos_bear or choch_bear)
+
+if new_bull_ob
+    off = find_recent_bear_offset()
+    if off >= 0
+        ob_top = open[off]
+        ob_bot = close[off]
+        ob_bar_left  = bar_index - off
+        ob_bar_right = bar_index + OB_EXTEND_BARS
+        b = box.new(ob_bar_left, ob_top, ob_bar_right, ob_bot,
+             border_color=color.new(MS_BULL_COLOR, 30),
+             bgcolor=OB_BULL_COLOR, border_width=1,
+             text="Bull OB", text_size=size.tiny,
+             text_halign=text.align_right, text_valign=text.align_top,
+             text_color=color.new(color.white, 30))
+        array.push(bull_ob_boxes, b)
+        array.push(bull_ob_tops,  ob_top)
+        array.push(bull_ob_bots,  ob_bot)
+        array.push(bull_ob_mit,   false)
+        // Cap the active list — drop the oldest if too many.
+        if array.size(bull_ob_boxes) > OB_MAX_ACTIVE
+            old = array.shift(bull_ob_boxes)
+            box.delete(old)
+            array.shift(bull_ob_tops)
+            array.shift(bull_ob_bots)
+            array.shift(bull_ob_mit)
+
+if new_bear_ob
+    off = find_recent_bull_offset()
+    if off >= 0
+        ob_top = close[off]
+        ob_bot = open[off]
+        ob_bar_left  = bar_index - off
+        ob_bar_right = bar_index + OB_EXTEND_BARS
+        b = box.new(ob_bar_left, ob_top, ob_bar_right, ob_bot,
+             border_color=color.new(MS_BEAR_COLOR, 30),
+             bgcolor=OB_BEAR_COLOR, border_width=1,
+             text="Bear OB", text_size=size.tiny,
+             text_halign=text.align_right, text_valign=text.align_bottom,
+             text_color=color.new(color.white, 30))
+        array.push(bear_ob_boxes, b)
+        array.push(bear_ob_tops,  ob_top)
+        array.push(bear_ob_bots,  ob_bot)
+        array.push(bear_ob_mit,   false)
+        if array.size(bear_ob_boxes) > OB_MAX_ACTIVE
+            old = array.shift(bear_ob_boxes)
+            box.delete(old)
+            array.shift(bear_ob_tops)
+            array.shift(bear_ob_bots)
+            array.shift(bear_ob_mit)
+
+// Maintenance pass — for every active OB, check three states each bar:
+//   (a) Closed beyond the far edge       -> INVALIDATED (delete box)
+//   (b) Wick or close re-entered the OB  -> MITIGATED (recolor)
+//   (c) Otherwise                        -> keep extending right
+ob_touched_bull = false
+ob_touched_bear = false
+
+i = 0
+while i < array.size(bull_ob_boxes)
+    bx = array.get(bull_ob_boxes, i)
+    top = array.get(bull_ob_tops,  i)
+    bot = array.get(bull_ob_bots,  i)
+    mit = array.get(bull_ob_mit,   i)
+
+    // (a) closed below the bottom of a bull OB = invalidated
+    if close < bot
+        box.delete(bx)
+        array.remove(bull_ob_boxes, i)
+        array.remove(bull_ob_tops,  i)
+        array.remove(bull_ob_bots,  i)
+        array.remove(bull_ob_mit,   i)
+        continue
+
+    // (b) low entered the zone for the first time. We accept any wick
+    // that pierced the TOP, since a deep wick that closes back above the
+    // bot is still a valid mitigation event (not an invalidation).
+    if not mit and low <= top
+        ob_touched_bull := true
+        box.set_bgcolor(bx, color.new(MS_BULL_COLOR, OB_MIT_OPACITY))
+        array.set(bull_ob_mit, i, true)
+
+    // (c) keep the right edge updated so the box trails the chart
+    box.set_right(bx, bar_index + OB_EXTEND_BARS)
+    i += 1
+
+i := 0
+while i < array.size(bear_ob_boxes)
+    bx = array.get(bear_ob_boxes, i)
+    top = array.get(bear_ob_tops,  i)
+    bot = array.get(bear_ob_bots,  i)
+    mit = array.get(bear_ob_mit,   i)
+
+    // closed above the top of a bear OB = invalidated
+    if close > top
+        box.delete(bx)
+        array.remove(bear_ob_boxes, i)
+        array.remove(bear_ob_tops,  i)
+        array.remove(bear_ob_bots,  i)
+        array.remove(bear_ob_mit,   i)
+        continue
+
+    // mirror of bull mitigation — any wick that pierced the BOT counts
+    // even if close came back above
+    if not mit and high >= bot
+        ob_touched_bear := true
+        box.set_bgcolor(bx, color.new(MS_BEAR_COLOR, OB_MIT_OPACITY))
+        array.set(bear_ob_mit, i, true)
+
+    box.set_right(bx, bar_index + OB_EXTEND_BARS)
+    i += 1
+
+// =============================================================================
+// MODULE 3: FAIR VALUE GAPS
+//   Classic 3-candle imbalance:
+//     Bullish FVG: low[0] > high[2]   (gap up; zone = high[2] .. low[0])
+//     Bearish FVG: high[0] < low[2]   (gap down; zone = high[0] .. low[2])
+//   Filtered by min size relative to ATR(14) so chop does not flood the chart.
+// =============================================================================
+
+var array<box>   bull_fvg_boxes = array.new<box>()
+var array<float> bull_fvg_tops  = array.new<float>()
+var array<float> bull_fvg_bots  = array.new<float>()
+
+var array<box>   bear_fvg_boxes = array.new<box>()
+var array<float> bear_fvg_tops  = array.new<float>()
+var array<float> bear_fvg_bots  = array.new<float>()
+
+new_bull_fvg = false
+new_bear_fvg = false
+
+if FVG_ENABLE and not na(high[2]) and not na(atr14) and atr14 > 0
+    // Bullish: bar -2 high < bar 0 low
+    bull_gap_top = low
+    bull_gap_bot = high[2]
+    bull_gap_size = bull_gap_top - bull_gap_bot
+    if bull_gap_size > 0 and bull_gap_size >= atr14 * FVG_MIN_ATR
+        new_bull_fvg := true
+        b = box.new(bar_index - 2, bull_gap_top, bar_index + FVG_EXTEND_BARS, bull_gap_bot,
+             border_color=color.new(MS_BULL_COLOR, 40),
+             bgcolor=FVG_BULL_COLOR, border_width=1,
+             text="FVG", text_size=size.tiny,
+             text_halign=text.align_left, text_valign=text.align_center,
+             text_color=color.new(color.white, 40))
+        array.push(bull_fvg_boxes, b)
+        array.push(bull_fvg_tops,  bull_gap_top)
+        array.push(bull_fvg_bots,  bull_gap_bot)
+        if array.size(bull_fvg_boxes) > FVG_MAX_ACTIVE
+            old = array.shift(bull_fvg_boxes)
+            box.delete(old)
+            array.shift(bull_fvg_tops)
+            array.shift(bull_fvg_bots)
+
+    // Bearish: bar -2 low > bar 0 high
+    bear_gap_top = low[2]
+    bear_gap_bot = high
+    bear_gap_size = bear_gap_top - bear_gap_bot
+    if bear_gap_size > 0 and bear_gap_size >= atr14 * FVG_MIN_ATR
+        new_bear_fvg := true
+        b = box.new(bar_index - 2, bear_gap_top, bar_index + FVG_EXTEND_BARS, bear_gap_bot,
+             border_color=color.new(MS_BEAR_COLOR, 40),
+             bgcolor=FVG_BEAR_COLOR, border_width=1,
+             text="FVG", text_size=size.tiny,
+             text_halign=text.align_left, text_valign=text.align_center,
+             text_color=color.new(color.white, 40))
+        array.push(bear_fvg_boxes, b)
+        array.push(bear_fvg_tops,  bear_gap_top)
+        array.push(bear_fvg_bots,  bear_gap_bot)
+        if array.size(bear_fvg_boxes) > FVG_MAX_ACTIVE
+            old = array.shift(bear_fvg_boxes)
+            box.delete(old)
+            array.shift(bear_fvg_tops)
+            array.shift(bear_fvg_bots)
+
+// FVG maintenance — shrink as price fills the gap, delete when fully filled.
+fvg_filled_bull = false
+fvg_filled_bear = false
+
+i := 0
+while i < array.size(bull_fvg_boxes)
+    bx  = array.get(bull_fvg_boxes, i)
+    top = array.get(bull_fvg_tops,  i)
+    bot = array.get(bull_fvg_bots,  i)
+
+    if low <= bot
+        // Fully filled — close has passed all the way through
+        box.delete(bx)
+        array.remove(bull_fvg_boxes, i)
+        array.remove(bull_fvg_tops,  i)
+        array.remove(bull_fvg_bots,  i)
+        fvg_filled_bull := true
+        continue
+
+    if low < top
+        // Partial fill — raise the bottom of the box to the new fill level
+        new_top = math.min(top, low)
+        if new_top != top
+            box.set_top(bx, new_top)
+            array.set(bull_fvg_tops, i, new_top)
+
+    box.set_right(bx, bar_index + FVG_EXTEND_BARS)
+    i += 1
+
+i := 0
+while i < array.size(bear_fvg_boxes)
+    bx  = array.get(bear_fvg_boxes, i)
+    top = array.get(bear_fvg_tops,  i)
+    bot = array.get(bear_fvg_bots,  i)
+
+    if high >= top
+        box.delete(bx)
+        array.remove(bear_fvg_boxes, i)
+        array.remove(bear_fvg_tops,  i)
+        array.remove(bear_fvg_bots,  i)
+        fvg_filled_bear := true
+        continue
+
+    if high > bot
+        new_bot = math.max(bot, high)
+        if new_bot != bot
+            box.set_bottom(bx, new_bot)
+            array.set(bear_fvg_bots, i, new_bot)
+
+    box.set_right(bx, bar_index + FVG_EXTEND_BARS)
+    i += 1
+
+// =============================================================================
+// ALERTS — point a TradingView alert at any of these conditions. Webhook URL
+// can hit /api/tv-webhook on the backend (endpoint not built yet) so the
+// existing Telegram + DB stack can ingest these events.
+// =============================================================================
+
+alertcondition(bos_bull,        title="BOS Bull",
+     message='{"event":"BOS","side":"bull","price":{{close}},"time":{{time}}}')
+alertcondition(bos_bear,        title="BOS Bear",
+     message='{"event":"BOS","side":"bear","price":{{close}},"time":{{time}}}')
+alertcondition(choch_bull,      title="CHOCH Bull",
+     message='{"event":"CHOCH","side":"bull","price":{{close}},"time":{{time}}}')
+alertcondition(choch_bear,      title="CHOCH Bear",
+     message='{"event":"CHOCH","side":"bear","price":{{close}},"time":{{time}}}')
+alertcondition(new_bull_ob,     title="New Bull Order Block",
+     message='{"event":"OB","side":"bull","price":{{close}},"time":{{time}}}')
+alertcondition(new_bear_ob,     title="New Bear Order Block",
+     message='{"event":"OB","side":"bear","price":{{close}},"time":{{time}}}')
+alertcondition(ob_touched_bull, title="Bull OB Touch",
+     message='{"event":"OB_TOUCH","side":"bull","price":{{close}},"time":{{time}}}')
+alertcondition(ob_touched_bear, title="Bear OB Touch",
+     message='{"event":"OB_TOUCH","side":"bear","price":{{close}},"time":{{time}}}')
+alertcondition(new_bull_fvg,    title="New Bull FVG",
+     message='{"event":"FVG","side":"bull","price":{{close}},"time":{{time}}}')
+alertcondition(new_bear_fvg,    title="New Bear FVG",
+     message='{"event":"FVG","side":"bear","price":{{close}},"time":{{time}}}')
+alertcondition(fvg_filled_bull, title="Bull FVG Filled",
+     message='{"event":"FVG_FILLED","side":"bull","price":{{close}},"time":{{time}}}')
+alertcondition(fvg_filled_bear, title="Bear FVG Filled",
+     message='{"event":"FVG_FILLED","side":"bear","price":{{close}},"time":{{time}}}')
+
+// =============================================================================
+// STATUS TABLE (top-right)
+// =============================================================================
+
+var table status = table.new(position.top_right, 2, 5, border_width=1)
+
+if barstate.islast
+    string trend_str = ms_trend == 1 ? "BULL" : ms_trend == -1 ? "BEAR" : "neutral"
+    color  trend_col = ms_trend == 1 ? MS_BULL_COLOR : ms_trend == -1 ? MS_BEAR_COLOR : color.gray
+
+    table.cell(status, 0, 0, "Trend",
+         bgcolor=color.new(color.gray, 80), text_color=color.white)
+    table.cell(status, 1, 0, trend_str,
+         bgcolor=color.new(trend_col, 70), text_color=color.white)
+
+    table.cell(status, 0, 1, "Bull OB",
+         bgcolor=color.new(color.gray, 90))
+    table.cell(status, 1, 1, str.tostring(array.size(bull_ob_boxes)),
+         bgcolor=color.new(color.gray, 90))
+
+    table.cell(status, 0, 2, "Bear OB",
+         bgcolor=color.new(color.gray, 90))
+    table.cell(status, 1, 2, str.tostring(array.size(bear_ob_boxes)),
+         bgcolor=color.new(color.gray, 90))
+
+    table.cell(status, 0, 3, "Bull FVG",
+         bgcolor=color.new(color.gray, 90))
+    table.cell(status, 1, 3, str.tostring(array.size(bull_fvg_boxes)),
+         bgcolor=color.new(color.gray, 90))
+
+    table.cell(status, 0, 4, "Bear FVG",
+         bgcolor=color.new(color.gray, 90))
+    table.cell(status, 1, 4, str.tostring(array.size(bear_fvg_boxes)),
+         bgcolor=color.new(color.gray, 90))

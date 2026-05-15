@@ -20,9 +20,23 @@ those still come from the Python worker on Railway.
 
 ## Files
 
-| File | Source | Strategy |
+| File | Source | Strategy / Toolkit |
 |---|---|---|
 | `champion.pine` | `backend/app/strategies/champion.py` | ★★★ Champion (Adaptive Regime) |
+| `smc_phase1.pine` | new (no Python equivalent) | SMC: Market Structure + Order Blocks + FVG |
+
+### `smc_phase1.pine` — what it draws
+
+- **Swing pivots**: HH / HL / LH / LL labels with adjustable left/right strength
+- **BOS** (solid line) on continuation breaks, **CHOCH** (dashed) on first opposite break
+- **Order Blocks**: anchored to the last opposite-coloured candle before a BOS/CHOCH; auto-mitigated when price wicks in; auto-invalidated when close pierces the far edge
+- **Fair Value Gaps**: classic 3-candle imbalance, ATR-filtered to skip chop, shrinks as price partially fills, deletes on full fill
+- **12 alert conditions** ready to wire to TradingView's alert dialog (BOS, CHOCH, new OB, OB touch, new FVG, FVG filled — both sides)
+- **Status table** top-right showing current trend, active OB and FVG counts
+
+Object limits (boxes, lines, labels) are capped at 500 each; arrays are managed so the chart never overflows. Toggle modules off in settings if you want a cleaner chart.
+
+Designed to compose with `champion.pine` — load both, Champion gives entry signals, SMC gives confluence zones.
 
 ## How to load into TradingView
 
