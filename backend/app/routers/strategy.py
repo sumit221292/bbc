@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from .. import trade_store
 from ..backtest import simulate
 from ..binance import fetch_klines
 from ..multi_tf import MTFContext
@@ -143,11 +144,27 @@ _CATEGORIES: dict[str, str] = {
 }
 
 
-def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> StrategySnapshot:
-    """Pick latest open trade (or HOLD), compute summary, package as snapshot row.
+def _db_interval_for(sid: str, user_interval: str) -> str:
+    """Which DB partition holds this strategy's trades.
 
-    Signals with RR < MIN_RR are dropped first so the per-strategy stats
-    only reflect trades that meet the global risk:reward floor.
+    Must match how the alert worker keys rows: MTF always runs on 1h,
+    SMC MTF on 5m, every other strategy on whichever interval the user
+    subscribed (we use the snapshot's user_interval as the closest proxy)."""
+    if is_smc_mtf(sid):
+        return "5m"
+    if is_mtf(sid):
+        return "1h"
+    return user_interval
+
+
+def _build_snapshot(
+    sid: str, name: str, signals: list[Signal], candles, user_interval: str,
+) -> StrategySnapshot:
+    """Live signal + DB stats. The signal half (BUY/SELL/HOLD, entry, SL,
+    target, mark-to-market PnL) must come from fresh candles, because that
+    is what the user trades against right now. Win rate / total trades /
+    cumulative PnL come from trade_store so the numbers reflect what the
+    worker has actually fired -- never from in-memory backtest.
     """
     signals = _filter_min_rr(signals)
     last_close = candles[-1].close
@@ -171,17 +188,17 @@ def _build_snapshot(sid: str, name: str, signals: list[Signal], candles) -> Stra
         entry = stop = target = pnl_live = None
         last_time = signals[-1].time if signals else None
 
-    counts = summarize(signals)
-    sim = simulate(candles, signals)
+    db_interval = _db_interval_for(sid, user_interval)
+    db = trade_store.stats(strategy_id=sid, interval=db_interval)
     return StrategySnapshot(
         id=sid, name=name,
         category=_CATEGORIES.get(sid, "Other"),
         signal=signal_type, status=status,
         entry=entry, stop_loss=stop, target=target,
         pnl_pct=pnl_live,
-        win_rate=counts["win_rate"],          # per-signal hit rate
-        total_pnl_pct=sim["total_pnl_pct"],   # realistic capital P&L
-        total_trades=counts["total"],         # count visible in trade log
+        win_rate=db["win_rate"],            # live-trade hit rate from DB
+        total_pnl_pct=db["total_pnl_pct"],  # live-trade cumulative PnL
+        total_trades=db["total"],           # live trades count
         last_signal_time=last_time,
     )
 
@@ -237,15 +254,15 @@ async def get_snapshot(
             if smc_ctx is None:
                 continue  # data fetch failed; skip rather than 500
             signals = annotate(run_smc_mtf(meta.id, smc_ctx, start_idx=60), smc_ctx.candles_5m)
-            rows.append(_build_snapshot(meta.id, meta.name, signals, smc_ctx.candles_5m))
+            rows.append(_build_snapshot(meta.id, meta.name, signals, smc_ctx.candles_5m, interval))
         else:
             signals = annotate(run_mtf(meta.id, ctx, start_idx=50), c1h)
-            rows.append(_build_snapshot(meta.id, meta.name, signals, c1h))
+            rows.append(_build_snapshot(meta.id, meta.name, signals, c1h, interval))
 
     # Single-TF strategies on the requested interval
     for cls in list_strategies():
         signals = annotate(cls().evaluate(c_int), c_int)
-        rows.append(_build_snapshot(cls.id, cls.name, signals, c_int))
+        rows.append(_build_snapshot(cls.id, cls.name, signals, c_int, interval))
 
     return SnapshotResponse(
         symbol=symbol.upper(), interval=interval,
@@ -277,90 +294,41 @@ class LeaderboardResponse(BaseModel):
     leaderboards: list[WindowLeaderboard]
 
 
-# Timeframes worth scanning for the leaderboard. 1m would need >1000 bars to
-# cover 24h so we exclude it; 5m / 15m / 1h cover all useful windows.
-_LB_TIMEFRAMES: list[tuple[str, int]] = [
-    ("5m", 600),    # 250 warmup + 288 = 538, plus a small buffer
-    ("15m", 400),   # 250 warmup + 96 = 346
-    ("1h", 500),    # comfortable for MTF + single-TF
-]
 _LB_WINDOWS_HOURS: list[int] = [1, 2, 4, 6, 12, 24]
 
 
 @router.get("/leaderboard", response_model=LeaderboardResponse)
 async def get_leaderboard(symbol: str = Query("BTCUSDT")):
-    """For each rolling window (1h-24h), return the top 3 (strategy, timeframe)
-    combos by realized PnL with $1000 capital and 2% risk per trade."""
-    try:
-        # Fetch all single-TF data in parallel.
-        candle_jobs = {tf: fetch_klines(symbol, tf, n) for tf, n in _LB_TIMEFRAMES}
-        # Plus 4h and 1d (for MTF).
-        candle_jobs["4h"] = fetch_klines(symbol, "4h", 1000)
-        candle_jobs["1d"] = fetch_klines(symbol, "1d", 1000)
-        candle_lists = await asyncio.gather(*candle_jobs.values())
-        candles = dict(zip(candle_jobs.keys(), candle_lists))
-    except Exception as e:
-        raise HTTPException(502, f"Binance error: {e}")
-
-    ctx = MTFContext(candles_1h=candles["1h"], candles_4h=candles["4h"], candles_1d=candles["1d"])
-
-    # Build name lookup for both single-TF and MTF strategies.
+    """Top (strategy, timeframe) combos by realized PnL, ranked from real
+    worker-fired trades only. Each rolling window filters DB rows by
+    signal_time. No Binance fetch needed -- the leaderboard is purely a
+    view over trade_store, so it stays accurate even when the market API
+    is rate-limited."""
     name_for: dict[str, str] = {cls.id: cls.name for cls in list_strategies()}
     for meta in list_mtf_metas():
         name_for[meta.id] = meta.name
 
-    # Pre-compute signals for every (strategy, timeframe) combo we care about.
-    # Filter low-RR setups so the leaderboard only ranks 1:2-or-better trades.
-    signal_cache: dict[tuple[str, str], list[Signal]] = {}
-    for tf, _ in _LB_TIMEFRAMES:
-        tf_candles = candles[tf]
-        for cls in list_strategies():
-            sigs = _filter_min_rr(cls().evaluate(tf_candles))
-            signal_cache[(cls.id, tf)] = annotate(sigs, tf_candles)
-    # MTF strategies on 1h. smc_mtf has its own 5m context. RR filter applied here too.
-    smc_ctx_lb: SMCMTFContext | None = None
-    for meta in list_mtf_metas():
-        if is_smc_mtf(meta.id):
-            if smc_ctx_lb is None:
-                smc_ctx_lb = SMCMTFContext(
-                    candles_5m=candles["5m"],
-                    candles_15m=candles["15m"],
-                    candles_1h=candles["1h"],
-                )
-            sigs = _filter_min_rr(run_smc_mtf(meta.id, smc_ctx_lb, start_idx=60))
-            signal_cache[(meta.id, "5m")] = annotate(sigs, candles["5m"])
-        else:
-            sigs = _filter_min_rr(run_mtf(meta.id, ctx, start_idx=50))
-            signal_cache[(meta.id, "1h")] = annotate(sigs, candles["1h"])
-
+    combos = trade_store.all_strategy_intervals()
     now_ts = int(datetime.now(timezone.utc).timestamp())
     leaderboards: list[WindowLeaderboard] = []
 
     for hours in _LB_WINDOWS_HOURS:
         cutoff = now_ts - hours * 3600
         scored: list[LeaderboardEntry] = []
-        for (sid, tf), signals in signal_cache.items():
-            tf_candles = candles[tf]
-            # First candle index whose start time is >= cutoff.
-            start_idx = next(
-                (i for i, c in enumerate(tf_candles) if c.time >= cutoff),
-                len(tf_candles),
-            )
-            if start_idx >= len(tf_candles):
-                continue
-            r = simulate(tf_candles, signals, start_idx)
-            if r["count"] == 0:
+        for sid, tf in combos:
+            s = trade_store.stats_in_window(cutoff, strategy_id=sid, interval=tf)
+            if s["total"] == 0:
                 continue
             scored.append(LeaderboardEntry(
                 strategy_id=sid,
                 strategy_name=name_for.get(sid, sid),
                 timeframe=tf,
-                trades=r["count"],
-                wins=r["wins"],
-                losses=r["losses"],
-                open=r["open"],
-                win_rate=r["win_rate"],
-                total_pnl_pct=r["total_pnl_pct"],
+                trades=s["total"],
+                wins=s["wins"],
+                losses=s["losses"],
+                open=s["open"],
+                win_rate=s["win_rate"],
+                total_pnl_pct=s["total_pnl_pct"],
             ))
         scored.sort(key=lambda e: e.total_pnl_pct, reverse=True)
         leaderboards.append(WindowLeaderboard(

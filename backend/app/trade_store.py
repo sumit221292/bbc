@@ -269,6 +269,51 @@ def stats(
     }
 
 
+def stats_in_window(
+    start_ts: int,
+    strategy_id: str | None = None,
+    interval: str | None = None,
+) -> dict[str, Any]:
+    """Like stats() but only counts trades whose signal_time >= start_ts.
+    Used by the leaderboard to rank rolling-window performance from real
+    worker-fired trades (not in-memory backtest)."""
+    sql = "SELECT status, pnl_pct FROM trades WHERE signal_time >= ?"
+    params: list[Any] = [int(start_ts)]
+    if strategy_id:
+        sql += " AND strategy_id = ?"
+        params.append(strategy_id)
+    if interval:
+        sql += " AND interval = ?"
+        params.append(interval)
+    with _lock, _connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    wins = sum(1 for r in rows if r["status"] == "WIN")
+    losses = sum(1 for r in rows if r["status"] == "LOSS")
+    open_ct = sum(1 for r in rows if r["status"] == "OPEN")
+    closed = wins + losses
+    total_pnl = sum((r["pnl_pct"] or 0.0) for r in rows if r["status"] in ("WIN", "LOSS"))
+    return {
+        "total": len(rows),
+        "closed": closed,
+        "wins": wins,
+        "losses": losses,
+        "open": open_ct,
+        "win_rate": (wins / closed * 100.0) if closed else 0.0,
+        "total_pnl_pct": total_pnl,
+        "avg_pnl_pct": (total_pnl / closed) if closed else 0.0,
+    }
+
+
+def all_strategy_intervals() -> list[tuple[str, str]]:
+    """Distinct (strategy_id, interval) pairs that have at least one trade.
+    Drives the leaderboard's iteration set."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT strategy_id, interval FROM trades"
+        ).fetchall()
+    return [(r["strategy_id"], r["interval"]) for r in rows]
+
+
 def per_strategy_stats() -> list[dict[str, Any]]:
     """Roll-up grouped by (strategy_id, interval). Used by /api/trades/stats."""
     with _lock, _connect() as conn:

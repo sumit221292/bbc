@@ -31,13 +31,13 @@ function Leaderboard({ data }) {
   return (
     <div className="leaderboard">
       <div className="lb-header">
-        <span className="title">🏆 Best Performers — Rolling Windows</span>
-        <span className="muted">$1000 · 2% risk · 0.2% fees</span>
+        <span className="title">🏆 Best Performers — Live Trades (DB)</span>
+        <span className="muted">worker-fired only</span>
       </div>
 
       <div className="lb-note">
-        Har time window mein <b>top 3 strategies</b> dikha raha hai (jisne sabse zyada profit kiya).
-        Includes timeframe (5m / 15m / 1h) jo us strategy ke liye best raha.
+        Har time window mein <b>top 3 (strategy, timeframe)</b> combos jinhone live data pe sabse zyada profit kiya.
+        Sirf actually-fired trades count hote hain — pehle 1-2 din kam dikhega, fir build-up.
       </div>
 
       {leaderboards.map(lb => (
@@ -76,8 +76,8 @@ function Leaderboard({ data }) {
       ))}
 
       <div className="lb-footnote muted small">
-        💡 <b>Note:</b> Past performance is not future performance. Short windows (1-2h) have
-        very few trades — luck dominates. 24h numbers ko trust karna better hai.
+        💡 <b>Note:</b> Numbers DB se aate hain — sirf vahi trades count hote hain jo worker ne fire ki aur jo close ho chuke hain.
+        Pehle 1-2 din mein zyadatar windows empty rahenge; build-up ke baad numbers reliable hote jaate hain.
       </div>
     </div>
   )

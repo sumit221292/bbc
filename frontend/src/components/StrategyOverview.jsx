@@ -60,7 +60,12 @@ function StrategyOverview({ data, selectedId, onSelect }) {
   return (
     <div className="overview">
       <div className="ov-header">
-        <span className="title">📊 All Strategies — Sorted by PnL</span>
+        <span className="title">📊 All Strategies — Live Trades (DB)</span>
+      </div>
+
+      <div className="ov-source-note muted small">
+        Numbers worker-fired trades se hain (live data, kabhi backtest nahi).
+        Jab tak alert worker koi trade fire nahi karta, stats 0 rahenge.
       </div>
 
       {/* Profitability summary banner */}
@@ -136,7 +141,7 @@ function StrategyOverview({ data, selectedId, onSelect }) {
       </div>
 
       <div className="ov-footnote muted small">
-        💡 <b>PnL ka matlab:</b> Agar tum is strategy ke saare signals follow karte ($1000 capital, 2% risk per trade, 0.2% fees), kitna profit/loss hota. Sirf positive PnL wale strategies subscribe karo.
+        💡 <b>PnL:</b> sirf jo trades worker ne actually fire ki + close hui hain. Empty stats matlab is strategy ne abhi tak koi trade nahi liya (ya subscription nahi hai).
       </div>
     </div>
   )

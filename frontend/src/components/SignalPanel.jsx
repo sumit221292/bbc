@@ -137,7 +137,9 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
 
   if (!result) return <div className="signal-panel"><div className="muted">Loading…</div></div>
   const { latest, signals, strategy: _sid } = result
-  const summary = stored.summary ?? result.summary
+  // Always show DB-backed stats (live worker-fired trades). Backtest summary
+  // is ignored so numbers stay consistent across Live / All / Best tabs.
+  const summary = stored.summary
   const strategyMeta = strategies.find(s => s.id === strategyId)
   const strategyName = strategyMeta?.name || strategyId || ''
 
@@ -192,7 +194,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
 
       {summary && (
         <div className="summary">
-          <div className="title">📊 Strategy Performance (jitna data load hua)</div>
+          <div className="title">📊 Live Performance — {strategyName} · {interval || '—'} (worker-fired only)</div>
           <div className="stats">
             <div><div className="k">Total Trades</div><div className="v">{summary.total}</div></div>
             <div><div className="k">Profit Hua</div><div className="v pos">{summary.wins}</div></div>
