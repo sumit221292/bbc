@@ -39,7 +39,10 @@ from . import trade_store
 
 log = logging.getLogger("btc.alerts")
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "alerts_config.json"
+# Legacy JSON config (pre-DB). Imported into kv_store on first load then
+# left in place untouched so a manual rollback is always possible.
+LEGACY_CONFIG_PATH = Path(__file__).resolve().parent.parent / "alerts_config.json"
+CONFIG_KEY = "alert_config"
 POLL_SECONDS = 60
 DEFAULT_SYMBOL = "BTCUSDT"
 
@@ -140,19 +143,34 @@ def _strategy_name(strategy_id: str) -> str:
 
 
 async def load_config() -> AlertConfig:
+    """Read the alert config from kv_store. Falls back to the legacy JSON
+    file once (and writes it into the DB) so users who upgrade don't lose
+    their Telegram setup."""
     async with _lock:
-        if not CONFIG_PATH.exists():
-            return AlertConfig()
-        try:
-            return AlertConfig(**json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-        except Exception:
-            log.exception("alerts config load failed; resetting")
-            return AlertConfig()
+        blob = trade_store.get_kv(CONFIG_KEY)
+        if blob is not None:
+            try:
+                return AlertConfig(**blob)
+            except Exception:
+                log.exception("alerts config (DB) corrupt; resetting")
+                return AlertConfig()
+
+        # One-shot migration from the JSON file.
+        if LEGACY_CONFIG_PATH.exists():
+            try:
+                data = json.loads(LEGACY_CONFIG_PATH.read_text(encoding="utf-8"))
+                cfg = AlertConfig(**data)
+                trade_store.set_kv(CONFIG_KEY, cfg.model_dump(mode="json"))
+                log.info("alerts config migrated from JSON file to DB kv_store")
+                return cfg
+            except Exception:
+                log.exception("legacy JSON config load failed; starting fresh")
+        return AlertConfig()
 
 
 async def save_config(cfg: AlertConfig) -> None:
     async with _lock:
-        CONFIG_PATH.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
+        trade_store.set_kv(CONFIG_KEY, cfg.model_dump(mode="json"))
 
 
 def _all_chat_ids(cfg: "AlertConfig") -> list[str]:

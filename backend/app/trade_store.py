@@ -1,27 +1,47 @@
-"""SQLite persistence for live alert trades.
+"""SQLite persistence for the BTC app.
 
-Only trades fired by the always-on alert worker land here -- backtest data
-never touches this store. Each row is unique on (strategy_id, interval,
-signal_time) so the worker can call insert_trade() every tick without
-worrying about dupes.
+Two tables, both narrow:
+  trades    -- one row per live alert signal (insert at fire time, flip
+               OPEN->WIN/LOSS when candles resolve it). Backtest data never
+               lands here. Unique on (strategy_id, interval, signal_time).
 
-Schema is intentionally narrow: one signal = one row. Status starts at OPEN
-and flips to WIN/LOSS exactly once when the alert loop sees the candles
-resolve it. PnL is the signal-level fixed payoff (entry->target or
-entry->stop), because that's the same number the Telegram closure message
-quotes.
+  kv_store  -- (key, value) singletons. value is a JSON string. Used for the
+               alert config blob so Telegram setup, subscriptions, auto-trade
+               settings, current position, and daily counters all live in one
+               place and survive Railway redeploys (when /data is a volume).
 
-Stats are always grouped by (strategy_id, interval) so the UI can show
-correct numbers even when a single strategy runs on multiple timeframes.
+Storage path: ${DATA_DIR}/app.db. DATA_DIR defaults to /data when that path
+exists and is writable (Railway volume convention), else falls back to the
+backend folder for local dev.
 """
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path(__file__).resolve().parent.parent / "trades.db"
+
+def _resolve_data_dir() -> Path:
+    """Pick a writable directory for the DB. Honors DATA_DIR for explicit
+    overrides; otherwise prefers /data (Railway volume) when it exists,
+    falling back to the backend package directory."""
+    override = os.environ.get("DATA_DIR")
+    if override:
+        p = Path(override)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    railway_volume = Path("/data")
+    if railway_volume.exists() and os.access(railway_volume, os.W_OK):
+        return railway_volume
+    # Local dev fallback: backend/ next to this module's parent.
+    return Path(__file__).resolve().parent.parent
+
+
+DATA_DIR = _resolve_data_dir()
+DB_PATH = DATA_DIR / "app.db"
 
 # sqlite3 connections aren't safe to share across threads without a lock.
 # FastAPI runs request handlers in a threadpool, so guard every call.
@@ -62,7 +82,57 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_trades_strat_interval "
             "ON trades(strategy_id, interval, signal_time DESC)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kv_store (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
         conn.commit()
+
+
+# ---------- Key-value (singleton blobs) ----------
+
+def get_kv(key: str) -> Any | None:
+    """Return the JSON-decoded value for `key`, or None if missing/corrupt."""
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM kv_store WHERE key = ?", (key,)
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["value"])
+    except json.JSONDecodeError:
+        return None
+
+
+def set_kv(key: str, value: Any, *, now: int | None = None) -> None:
+    import time as _t
+    ts = int(_t.time()) if now is None else now
+    payload = json.dumps(value, default=str)
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO kv_store (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, payload, ts),
+        )
+        conn.commit()
+
+
+def delete_kv(key: str) -> bool:
+    with _lock, _connect() as conn:
+        cur = conn.execute("DELETE FROM kv_store WHERE key = ?", (key,))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def insert_trade(

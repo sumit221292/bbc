@@ -186,6 +186,24 @@ and bundles it into the FastAPI image, so a single container serves everything.
 
 No env vars needed. The Binance API used is public (no API key required).
 
+#### Persisting trades + Telegram config across redeploys (one-time setup)
+
+The app writes to `/data/app.db` (SQLite) for both trade history and the
+alert/auto-trade config. By default this file lives inside the container and
+is **wiped on every redeploy**. To make it persistent:
+
+1. In the Railway dashboard, open the service → **Volumes** → **+ Create Volume**.
+2. Set **Mount path** to `/data` (exact match — the Dockerfile declares this).
+3. Pick the smallest size offered (1 GB is more than enough; the DB stays under a few MB).
+4. Click **Add** — Railway will redeploy with the volume attached.
+
+After this, Telegram bot token, chat IDs, subscriptions, auto-trade settings,
+the current position, and all saved trades survive future redeploys.
+
+Local override: set `DATA_DIR=/some/path` to put `app.db` somewhere else
+(useful for tests). With no override and no `/data` volume, the DB falls back
+to `backend/app.db` next to the code.
+
 ### Self-host (Docker)
 
 ```bash
