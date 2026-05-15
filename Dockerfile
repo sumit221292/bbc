@@ -20,13 +20,12 @@ COPY backend/ ./
 # Static frontend bundle (served by FastAPI in production)
 COPY --from=frontend-build /app/frontend/dist ./frontend_dist
 
-# Persistent data dir. On Railway, attach a Volume at /data so app.db
-# (trades + alert config + auto-trade state) survives redeploys. The
-# directory is created here so the app also boots cleanly without a
-# volume — in that case the DB lives inside the container and resets on
-# every deploy.
+# Persistent data dir. On Railway, attach a Volume at /data via the
+# project canvas so app.db (trades + alert config + auto-trade state)
+# survives redeploys. Railway rejects the `VOLUME` Docker instruction
+# (it manages mounts itself), so we only create the directory here for
+# fallback boot when no volume is attached.
 RUN mkdir -p /data
-VOLUME ["/data"]
 
 EXPOSE 8000
 # Railway / generic platform: PORT env var; default to 8000.
