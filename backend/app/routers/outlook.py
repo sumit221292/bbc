@@ -1,7 +1,7 @@
 """Market outlook endpoint — structured 'what to watch next session' data.
 
-Same logic as scripts/market_outlook.py but returns JSON. The frontend uses
-this to render a 'Trade Plan' card above the strategy panel.
+Returns the bias, key levels, volatility and a trade plan as JSON. The
+frontend renders this in the Plan tab card.
 """
 import asyncio
 
