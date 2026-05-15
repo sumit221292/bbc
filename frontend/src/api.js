@@ -60,15 +60,15 @@ export async function setAlertsConfig(payload) {
   return r.json()
 }
 
-export async function sendBackendTest({ token, chat_id }) {
+export async function sendBackendTest({ token, chat_id, chat_ids = [] }) {
   const r = await fetch(`${BASE}/api/alerts/test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token, chat_id }),
+    body: JSON.stringify({ token, chat_id, chat_ids }),
   })
   const data = await r.json().catch(() => ({}))
   if (!r.ok) return { ok: false, description: data.detail || `HTTP ${r.status}` }
-  return { ok: true }
+  return { ok: true, summary: data.summary, targets: data.targets }
 }
 
 export async function setAutoTrade(payload) {

@@ -18,7 +18,8 @@ function timeAgo(ts) {
  *  browser tab closed. */
 function AlertsTab({ strategies, snapshot }) {
   const [token, setToken] = useState('')
-  const [chatId, setChatId] = useState('')
+  // Chat IDs entered as comma-separated; parsed to list on save.
+  const [chatIdsText, setChatIdsText] = useState('')
   const [enabled, setEnabled] = useState(true)
   const [subs, setSubs] = useState([])    // [{ strategy_id, interval }]
   const [serverState, setServerState] = useState(null)
@@ -31,16 +32,22 @@ function AlertsTab({ strategies, snapshot }) {
   useEffect(() => {
     getAlertsConfig().then(s => {
       setServerState(s)
-      setChatId(s.chat_id || '')
+      // Merge legacy chat_id + new chat_ids into a single text representation
+      const all = []
+      if (s.chat_id) all.push(s.chat_id)
+      for (const c of s.chat_ids || []) if (!all.includes(c)) all.push(c)
+      setChatIdsText(all.join(', '))
       setEnabled(s.enabled)
       setSubs(s.subscriptions || [])
-      // token is never returned for security; user re-enters once
     }).catch(() => { /* offline ok */ })
     const id = setInterval(() => {
       getAlertsConfig().then(setServerState).catch(() => {})
     }, 30000)
     return () => clearInterval(id)
   }, [])
+
+  const parseChatIds = () => chatIdsText.split(',')
+    .map(s => s.trim()).filter(Boolean)
 
   const subIds = new Set(subs.map(s => s.strategy_id))
 
@@ -60,17 +67,17 @@ function AlertsTab({ strategies, snapshot }) {
   const save = async () => {
     setSaving(true)
     try {
-      const payload = {
-        token: token || undefined,  // omit if empty so backend keeps existing
-        chat_id: chatId,
+      const chatIds = parseChatIds()
+      const cleaned = {
+        token: token || '',           // empty = keep existing on server
+        chat_id: '',                  // we use the new list field now
+        chat_ids: chatIds,
         enabled,
         subscriptions: subs,
       }
-      // FastAPI requires explicit fields, send empty string to mean "no change to token"
-      const cleaned = { ...payload, token: token || '' }
       const updated = await setAlertsConfig(cleaned)
       setServerState(updated)
-      setTestStatus('✅ Saved to backend')
+      setTestStatus(`✅ Saved to backend (${chatIds.length} recipient${chatIds.length === 1 ? '' : 's'})`)
       setToken('')  // clear local copy after saving (it's stored server-side)
     } catch (e) {
       setTestStatus(`❌ Save failed: ${e}`)
@@ -79,24 +86,22 @@ function AlertsTab({ strategies, snapshot }) {
   }
 
   const sendTest = async () => {
-    if (!chatId) {
-      setTestStatus('❌ Need chat_id')
+    const chatIds = parseChatIds()
+    if (chatIds.length === 0) {
+      setTestStatus('❌ Need at least 1 chat_id')
       return
     }
-    if (!token && !serverState?.has_token) {
-      setTestStatus('❌ Need token (paste it once, then click Save)')
-      return
-    }
-    setTestStatus('Sending…')
-    // Use whichever token is freshest (form takes priority)
-    const useToken = token || ''  // empty -> backend uses stored
-    if (!useToken) {
+    if (!token) {
       setTestStatus('❌ Token must be entered in the form for the test')
       return
     }
-    const res = await sendBackendTest({ token: useToken, chat_id: chatId })
-    if (res.ok) setTestStatus('✅ Sent! Telegram pe check karo.')
-    else setTestStatus('❌ ' + res.description)
+    setTestStatus('Sending…')
+    const res = await sendBackendTest({ token, chat_id: '', chat_ids: chatIds })
+    if (res.ok) {
+      setTestStatus(`✅ ${res.summary || 'Sent'} — check all Telegram chats.`)
+    } else {
+      setTestStatus('❌ ' + res.description)
+    }
   }
 
   const detectChatId = async () => {
@@ -179,6 +184,30 @@ function AlertsTab({ strategies, snapshot }) {
         </ol>
       </details>
 
+      <details className="alerts-help">
+        <summary>👥 Multiple users ko alerts kaise bhejen?</summary>
+        <p><b>Easiest way — Telegram Group (sabko ek saath):</b></p>
+        <ol>
+          <li>Telegram pe ek <b>group</b> create karo (e.g., "BTC Signals")</li>
+          <li>Group mein apne bot ko add karo (Settings → Add Members → search bot username)</li>
+          <li>Group ke saare members add karo</li>
+          <li>Group ko ek message bhejo (e.g., "hello"). Yeh zaroori hai pehle baar.</li>
+          <li>Dashboard pe <b>🔍 Auto-detect Chat ID</b> click karo — group ka ID dikhega
+              (negative number like <code>-1001234567890</code>)</li>
+          <li>Add it as the (only) chat ID → Save</li>
+          <li>Bot ke saare messages group mein aayenge, sabhi members ko visible</li>
+        </ol>
+        <p><b>OR — Individual chat IDs (separate chats):</b></p>
+        <ol>
+          <li>Har user apne bot ko personally <b>Start</b> karega + message bhejega</li>
+          <li>Tum auto-detect karke saare chat IDs collect karo</li>
+          <li>Comma-separated list mein paste karo: <code>123, 456, -1001234</code></li>
+          <li>Save — har message ko parallel mein sabko bheja jaayega</li>
+        </ol>
+        <p><b>Group ke fayde:</b> sabko ek saath dikhega, group chat ke saath discuss kar sakte ho.<br/>
+        <b>Individual ke fayde:</b> private alerts, alag-alag log alag dekhenge.</p>
+      </details>
+
       <div className="alerts-form">
         <label>
           <span>Bot Token {serverState?.has_token && <em className="muted small">(stored on server)</em>}</span>
@@ -190,12 +219,12 @@ function AlertsTab({ strategies, snapshot }) {
           />
         </label>
         <label>
-          <span>Chat ID</span>
+          <span>Chat IDs <em className="muted small">(comma-separated for multiple recipients)</em></span>
           <input
             type="text"
-            value={chatId}
-            onChange={e => setChatId(e.target.value)}
-            placeholder="123456789"
+            value={chatIdsText}
+            onChange={e => setChatIdsText(e.target.value)}
+            placeholder="123456789, -1001234567890, 987654321"
           />
         </label>
 
@@ -213,10 +242,11 @@ function AlertsTab({ strategies, snapshot }) {
             🔍 Auto-detect Chat ID
           </button>
           <button className="alerts-test secondary" onClick={sendTest}
-                  disabled={!chatId || (!token && !serverState?.has_token)}>
-            Send Test
+                  disabled={parseChatIds().length === 0 || !token}>
+            Send Test (all chats)
           </button>
-          <button className="alerts-test" onClick={save} disabled={saving || !chatId}>
+          <button className="alerts-test" onClick={save}
+                  disabled={saving || parseChatIds().length === 0}>
             {saving ? 'Saving…' : '💾 Save to Backend'}
           </button>
         </div>
@@ -225,7 +255,16 @@ function AlertsTab({ strategies, snapshot }) {
           <div className="alerts-detected">
             {detectedChats.map(chat => (
               <button key={chat.id} type="button" className="alerts-detected-row"
-                      onClick={() => { setChatId(String(chat.id)); setDetectStatus('✅ Chat ID set.') }}>
+                      onClick={() => {
+                        const cur = parseChatIds()
+                        const id = String(chat.id)
+                        if (!cur.includes(id)) {
+                          setChatIdsText(cur.length ? `${chatIdsText.replace(/,\s*$/, '')}, ${id}` : id)
+                          setDetectStatus(`✅ Added ${id}`)
+                        } else {
+                          setDetectStatus(`already in list: ${id}`)
+                        }
+                      }}>
                 <code>{chat.id}</code>
                 <span className="muted">
                   {chat.type}{chat.name && ` — ${chat.name}`}
@@ -245,7 +284,8 @@ function AlertsTab({ strategies, snapshot }) {
         <div className="alerts-subs-actions">
           <button onClick={subAll}>Select All</button>
           <button onClick={subNone}>Clear All</button>
-          <button className="primary" onClick={save} disabled={saving || !chatId}>
+          <button className="primary" onClick={save}
+                  disabled={saving || parseChatIds().length === 0}>
             {saving ? '…' : '💾 Save'}
           </button>
         </div>

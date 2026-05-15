@@ -100,7 +100,10 @@ class PendingSignal(BaseModel):
 
 class AlertConfig(BaseModel):
     token: str = ""
+    # Legacy single chat_id (kept for backward compat).
     chat_id: str = ""
+    # New multi-chat field — every notification is broadcast to every id here.
+    chat_ids: list[str] = Field(default_factory=list)
     enabled: bool = False
     symbol: str = DEFAULT_SYMBOL
     subscriptions: list[Subscription] = Field(default_factory=list)
@@ -149,6 +152,37 @@ async def load_config() -> AlertConfig:
 async def save_config(cfg: AlertConfig) -> None:
     async with _lock:
         CONFIG_PATH.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
+
+
+def _all_chat_ids(cfg: "AlertConfig") -> list[str]:
+    """Merge legacy single-chat field with the new multi-chat list, deduped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for cid in [cfg.chat_id, *cfg.chat_ids]:
+        cid = (cid or "").strip()
+        if cid and cid not in seen:
+            seen.add(cid)
+            out.append(cid)
+    return out
+
+
+async def broadcast_telegram(token: str, chat_ids: list[str], text: str) -> tuple[bool, str]:
+    """Send `text` to every chat in parallel. Returns (any_succeeded, summary).
+    'any_succeeded' is True if at least one delivery worked, so the caller can
+    mark the signal as 'notified' without redelivering to recipients that
+    already got it."""
+    if not chat_ids:
+        return False, "no chat_ids configured"
+    results = await asyncio.gather(*[
+        send_telegram(token, cid, text) for cid in chat_ids
+    ], return_exceptions=False)
+    failures = [(cid, err) for cid, (ok, err) in zip(chat_ids, results) if not ok]
+    succeeded = sum(1 for ok, _ in results if ok)
+    if failures:
+        log.warning("broadcast partial: %d/%d delivered; failures: %s",
+                    succeeded, len(chat_ids),
+                    "; ".join(f"{cid}:{err}" for cid, err in failures))
+    return succeeded > 0, f"{succeeded}/{len(chat_ids)} delivered"
 
 
 async def send_telegram(token: str, chat_id: str, text: str) -> tuple[bool, str]:
@@ -474,7 +508,8 @@ async def alert_loop():
     while True:
         try:
             cfg = await load_config()
-            if cfg.enabled and cfg.token and cfg.chat_id and cfg.subscriptions:
+            recipients = _all_chat_ids(cfg)
+            if cfg.enabled and cfg.token and recipients and cfg.subscriptions:
                 changed = False
                 for sub in cfg.subscriptions:
                     try:
@@ -489,7 +524,7 @@ async def alert_loop():
                         matching = next((s for s in all_signals if s.time == pending.time), None)
                         if matching is not None and matching.status in ("WIN", "LOSS"):
                             close_msg = _format_closure(cfg.symbol, name, pending, matching)
-                            ok_c, _ = await send_telegram(cfg.token, cfg.chat_id, close_msg)
+                            ok_c, _ = await broadcast_telegram(cfg.token, recipients, close_msg)
                             if ok_c:
                                 cfg.pending_close.pop(sub.strategy_id, None)
                                 changed = True
@@ -522,7 +557,7 @@ async def alert_loop():
                         msg = _format_signal(cfg.symbol, name, latest)
                         if trade_status:
                             msg = msg + "\n\n" + trade_status
-                        ok, err = await send_telegram(cfg.token, cfg.chat_id, msg)
+                        ok, err = await broadcast_telegram(cfg.token, recipients, msg)
                         if ok:
                             cfg.last_seen[sub.strategy_id] = latest.time
                             # Stash for follow-up closure alert.

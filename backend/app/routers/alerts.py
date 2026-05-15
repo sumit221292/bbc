@@ -15,7 +15,8 @@ router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
 class ConfigUpdate(BaseModel):
     token: str = ""
-    chat_id: str = ""
+    chat_id: str = ""                     # legacy single chat
+    chat_ids: list[str] = []              # new: multiple recipients
     enabled: bool = True
     symbol: str = "BTCUSDT"
     subscriptions: list[Subscription] = []
@@ -23,7 +24,8 @@ class ConfigUpdate(BaseModel):
 
 class TestRequest(BaseModel):
     token: str
-    chat_id: str
+    chat_id: str = ""                     # legacy
+    chat_ids: list[str] = []              # new
 
 
 class AutoTradeView(BaseModel):
@@ -48,7 +50,8 @@ class AutoTradeView(BaseModel):
 class ConfigResponse(BaseModel):
     """What we expose to the frontend. Token is partly redacted for safety."""
     has_token: bool
-    chat_id: str
+    chat_id: str                      # legacy single
+    chat_ids: list[str]               # new multi
     enabled: bool
     symbol: str
     subscriptions: list[Subscription]
@@ -82,6 +85,7 @@ def _to_response(cfg: AlertConfig) -> ConfigResponse:
     return ConfigResponse(
         has_token=bool(cfg.token),
         chat_id=cfg.chat_id,
+        chat_ids=cfg.chat_ids,
         enabled=cfg.enabled,
         symbol=cfg.symbol,
         subscriptions=cfg.subscriptions,
@@ -106,15 +110,25 @@ async def update_alerts_config(payload: ConfigUpdate):
     if payload.token:
         cfg.token = payload.token
     cfg.chat_id = payload.chat_id
+    # Clean up the multi-chat list: strip whitespace, drop blanks/dupes.
+    cleaned = []
+    seen = set()
+    for cid in payload.chat_ids:
+        c = (cid or "").strip()
+        if c and c not in seen:
+            seen.add(c)
+            cleaned.append(c)
+    cfg.chat_ids = cleaned
     cfg.symbol = payload.symbol or "BTCUSDT"
     # Auto-enable when the config is fully populated. Without this, on a
     # fresh Railway deploy the alerts_config.json is reset (enabled=false)
     # and the frontend's first GET propagates that 'false' back into the
     # form -- the user clicks Save thinking they're enabling, but they're
-    # silently saving a paused worker. Now: if the user has token + chat_id
-    # + at least one subscription, we force enabled=True. To pause, they
-    # send subs=[] or call the (future) /pause endpoint.
-    has_full = bool(cfg.token and payload.chat_id and payload.subscriptions)
+    # silently saving a paused worker. Now: if the user has token + at least
+    # one chat + at least one subscription, we force enabled=True. To pause,
+    # clear subscriptions.
+    has_chat = bool(payload.chat_id or cleaned)
+    has_full = bool(cfg.token and has_chat and payload.subscriptions)
     cfg.enabled = payload.enabled if not has_full else True
 
     now = int(time.time())
@@ -237,12 +251,23 @@ async def kill_auto_trade():
 
 @router.post("/test")
 async def send_test(payload: TestRequest):
-    ok, err = await send_telegram(
-        payload.token, payload.chat_id,
+    """Fire a test message to every chat_id provided (legacy + new list)."""
+    from ..alerts import broadcast_telegram
+    targets: list[str] = []
+    seen = set()
+    for cid in [payload.chat_id, *payload.chat_ids]:
+        c = (cid or "").strip()
+        if c and c not in seen:
+            seen.add(c)
+            targets.append(c)
+    if not targets:
+        raise HTTPException(400, "no chat_id provided")
+    any_ok, summary = await broadcast_telegram(
+        payload.token, targets,
         "✅ *Backend worker test*\n\n"
         "Notifications setup OK! Yeh message backend se aaya hai. "
         "Ab browser band ho ya khulla, alerts aate rahenge.",
     )
-    if not ok:
-        raise HTTPException(400, f"Telegram error: {err}")
-    return {"ok": True}
+    if not any_ok:
+        raise HTTPException(400, f"Telegram error: 0/{len(targets)} delivered")
+    return {"ok": True, "summary": summary, "targets": len(targets)}
