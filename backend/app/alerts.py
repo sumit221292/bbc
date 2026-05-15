@@ -89,6 +89,15 @@ CONFIRM_PHRASE = "I UNDERSTAND THE RISKS"
 MAX_RISK_PCT = 0.05  # absolute cap regardless of user input
 
 
+class PendingSignal(BaseModel):
+    """A signal we've notified about whose outcome we still need to follow up on."""
+    time: int          # signal's candle time (matches sig.time)
+    side: str          # BUY / SELL
+    entry: float
+    stop: float
+    target: float
+
+
 class AlertConfig(BaseModel):
     token: str = ""
     chat_id: str = ""
@@ -97,6 +106,9 @@ class AlertConfig(BaseModel):
     subscriptions: list[Subscription] = Field(default_factory=list)
     # last seen signal time per strategy_id (epoch seconds)
     last_seen: dict[str, int] = Field(default_factory=dict)
+    # Per-strategy: the most recently NOTIFIED signal whose outcome (WIN/LOSS)
+    # we still need to send a follow-up Telegram for.
+    pending_close: dict[str, PendingSignal] = Field(default_factory=dict)
     last_poll: int = 0
     last_error: str = ""
     auto_trade: AutoTradeConfig = Field(default_factory=AutoTradeConfig)
@@ -220,8 +232,28 @@ def _format_signal(symbol: str, name: str, sig) -> str:
     return "\n".join(parts)
 
 
+def _format_closure(symbol: str, name: str, pending: PendingSignal, sig) -> str:
+    """Message sent when a previously-notified open trade resolves."""
+    safe_name = name.replace("*", "").replace("_", "\\_")
+    if sig.status == "WIN":
+        head = f"✅ *WIN* — `{symbol}` ({pending.side} @ ${pending.entry:,.2f})"
+        exit_price = pending.target
+        pnl_dir = "+"
+    else:  # LOSS
+        head = f"❌ *LOSS* — `{symbol}` ({pending.side} @ ${pending.entry:,.2f})"
+        exit_price = pending.stop
+        pnl_dir = "-"
+    pnl_pct = abs(sig.pnl_pct or 0.0)
+    return "\n".join([
+        head,
+        f"*Strategy:* {safe_name}",
+        f"*Exit:* `${exit_price:,.2f}`",
+        f"*P&L:* {pnl_dir}{pnl_pct:.2f}% (signal-level)",
+    ])
+
+
 async def _evaluate_subscription(sub: Subscription, symbol: str):
-    """Returns (latest_open_signal_or_None, strategy_name)."""
+    """Returns (latest_open_signal_or_None, full_signals_list, strategy_name)."""
     sid = sub.strategy_id
     interval = sub.interval or _default_interval(sid)
     name = _strategy_name(sid)
@@ -248,7 +280,7 @@ async def _evaluate_subscription(sub: Subscription, symbol: str):
         signals = annotate(strat.evaluate(candles), candles)
 
     open_signals = [s for s in signals if s.status == "OPEN"]
-    return (open_signals[-1] if open_signals else None), name
+    return (open_signals[-1] if open_signals else None), signals, name
 
 
 def _utc_midnight(ts: int) -> int:
@@ -446,10 +478,24 @@ async def alert_loop():
                 changed = False
                 for sub in cfg.subscriptions:
                     try:
-                        latest, name = await _evaluate_subscription(sub, cfg.symbol)
+                        latest, all_signals, name = await _evaluate_subscription(sub, cfg.symbol)
                     except Exception as e:
                         log.warning("eval %s failed: %s", sub.strategy_id, e)
                         continue
+
+                    # 1. Closure check — was a previously-notified trade resolved?
+                    pending = cfg.pending_close.get(sub.strategy_id)
+                    if pending is not None:
+                        matching = next((s for s in all_signals if s.time == pending.time), None)
+                        if matching is not None and matching.status in ("WIN", "LOSS"):
+                            close_msg = _format_closure(cfg.symbol, name, pending, matching)
+                            ok_c, _ = await send_telegram(cfg.token, cfg.chat_id, close_msg)
+                            if ok_c:
+                                cfg.pending_close.pop(sub.strategy_id, None)
+                                changed = True
+                                log.info("[CLOSURE] sent %s for %s @ %s",
+                                         matching.status, sub.strategy_id, matching.time)
+
                     if latest is None:
                         continue
                     last_seen = cfg.last_seen.get(sub.strategy_id, 0)
@@ -479,6 +525,14 @@ async def alert_loop():
                         ok, err = await send_telegram(cfg.token, cfg.chat_id, msg)
                         if ok:
                             cfg.last_seen[sub.strategy_id] = latest.time
+                            # Stash for follow-up closure alert.
+                            if (latest.entry is not None and latest.stop_loss is not None
+                                    and latest.target is not None):
+                                cfg.pending_close[sub.strategy_id] = PendingSignal(
+                                    time=latest.time, side=latest.type,
+                                    entry=latest.entry, stop=latest.stop_loss,
+                                    target=latest.target,
+                                )
                             changed = True
                             log.info("sent alert for %s @ %s", sub.strategy_id, latest.time)
                         else:
