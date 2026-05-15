@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Chart from './components/Chart.jsx'
+import TradingViewChart from './components/TradingViewChart.jsx'
 import StrategySelector from './components/StrategySelector.jsx'
 import Toolbar from './components/Toolbar.jsx'
 import SignalPanel from './components/SignalPanel.jsx'
@@ -27,6 +28,9 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState(null)
   const [activeTab, setActiveTab] = usePersistedState('btc.tab', 'live')
   const [sidebarWidth, setSidebarWidth] = usePersistedState('btc.sidebarWidth', 380)
+  // 'native' = our Lightweight Charts with signal markers + SL/TP lines.
+  // 'tradingview' = official Advanced Chart widget (no signal overlay).
+  const [chartMode, setChartMode] = usePersistedState('btc.chartMode', 'native')
 
   // Telegram alerts now run on the backend (always-on); the AlertsTab
   // talks directly to /api/alerts/config so we don't need state here.
@@ -220,6 +224,7 @@ export default function App() {
         interval={interval} onIntervalChange={setInterval}
         drawMode={drawMode} onDrawModeChange={setDrawMode}
         onClearDrawings={onClearDrawings}
+        chartMode={chartMode} onChartModeChange={setChartMode}
       />
 
       <StrategySelector
@@ -235,7 +240,9 @@ export default function App() {
         style={{ gridTemplateColumns: `minmax(0, 1fr) 6px ${sidebarWidth || 380}px` }}
       >
         <section className="chart-pane">
-          <Chart ref={chartRef} />
+          {chartMode === 'tradingview'
+            ? <TradingViewChart symbol={symbol} interval={interval} />
+            : <Chart ref={chartRef} />}
         </section>
         <Resizer current={sidebarWidth} onResize={setSidebarWidth} />
         <aside className="side-pane">

@@ -111,6 +111,37 @@ body {
 .chart-pane { position: relative; min-height: 0; min-width: 0; }
 .chart-container { position: relative; width: 100%; height: 100%; }
 
+/* TradingView widget pane */
+.tv-chart {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--card);
+}
+.tv-chart-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: var(--card-2, #161a1f);
+  border-bottom: 1px solid var(--border);
+}
+.tv-chart-label { color: var(--text-muted, #8a93a3); }
+.tv-chart-link {
+  color: var(--accent, #4a9eff);
+  text-decoration: none;
+  font-weight: 500;
+}
+.tv-chart-link:hover { text-decoration: underline; }
+.tv-chart-iframe {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  display: block;
+}
+
 /* Draggable divider between chart and sidebar */
 .resizer {
   cursor: col-resize;

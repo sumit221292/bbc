@@ -20,7 +20,9 @@ function Toolbar({
   interval, onIntervalChange,
   drawMode, onDrawModeChange,
   onClearDrawings,
+  chartMode, onChartModeChange,
 }) {
+  const tvActive = chartMode === 'tradingview'
   return (
     <div className="toolbar">
       <div className="group">
@@ -38,19 +40,38 @@ function Toolbar({
         </div>
       </div>
       <div className="group">
-        <label>Draw Tool</label>
+        <label>Chart</label>
         <div className="seg">
-          {[
-            ['none', 'Band'],
-            ['trend', 'Line'],
-            ['hline', 'Hor.'],
-            ['free', 'Free'],
-          ].map(([m, label]) => (
-            <button key={m} className={drawMode === m ? 'on' : ''} onClick={() => onDrawModeChange(m)}>{label}</button>
-          ))}
-          <button onClick={onClearDrawings}>Saaf</button>
+          <button
+            className={!tvActive ? 'on' : ''}
+            onClick={() => onChartModeChange('native')}
+            title="Apna chart with strategy markers + SL/TP lines"
+          >Our</button>
+          <button
+            className={tvActive ? 'on' : ''}
+            onClick={() => onChartModeChange('tradingview')}
+            title="TradingView widget — full indicator suite, no signal overlay"
+          >TradingView</button>
         </div>
       </div>
+      {/* Drawing tools only make sense for the native chart. Hide when on
+          TradingView mode so the user is not confused by inert buttons. */}
+      {!tvActive && (
+        <div className="group">
+          <label>Draw Tool</label>
+          <div className="seg">
+            {[
+              ['none', 'Band'],
+              ['trend', 'Line'],
+              ['hline', 'Hor.'],
+              ['free', 'Free'],
+            ].map(([m, label]) => (
+              <button key={m} className={drawMode === m ? 'on' : ''} onClick={() => onDrawModeChange(m)}>{label}</button>
+            ))}
+            <button onClick={onClearDrawings}>Saaf</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
