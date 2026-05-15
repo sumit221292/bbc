@@ -20,6 +20,11 @@ function attachConsoleCollector(page, bag) {
   page.on('requestfailed', req => {
     const url = req.url()
     if (/favicon\.ico|favicon\.svg/i.test(url)) return
+    // Only fail on requests to our own surface. Third-party widgets
+    // (TradingView iframe, analytics, ad blockers) abort their own
+    // requests during navigation and that is not our bug.
+    const sameOrigin = new URL(url).origin === new URL(page.url()).origin
+    if (!sameOrigin) return
     bag.push(`[requestfailed] ${url} ${req.failure()?.errorText}`)
   })
   page.on('response', resp => {
@@ -167,6 +172,34 @@ test.describe('BTC trading app — full surface', () => {
     }
 
     if (errors.length) console.warn('INTERVAL SWITCH issues:', errors)
+    expect(errors, errors.join('\n')).toHaveLength(0)
+  })
+
+  test('Chart toggle — TradingView mode mounts iframe, switches back', async ({ page }) => {
+    const errors = []
+    attachConsoleCollector(page, errors)
+    await page.goto('/')
+
+    // Default: native chart pane should be present, no iframe yet.
+    await expect(page.locator('.chart-container, .chart-pane canvas').first()).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('.tv-chart-iframe')).toHaveCount(0)
+
+    // Switch to TradingView mode.
+    await page.locator('.toolbar button', { hasText: 'TradingView' }).click()
+    await expect(page.locator('.tv-chart-iframe')).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.tv-chart-link')).toContainText(/Open my saved chart/i)
+
+    // Drawing tools must be hidden in TV mode (they cannot operate on the iframe).
+    await expect(page.locator('.toolbar button', { hasText: /^Band$/ })).toHaveCount(0)
+
+    // Switch back to native chart.
+    await page.locator('.toolbar button', { hasText: 'Our' }).click()
+    await expect(page.locator('.tv-chart-iframe')).toHaveCount(0)
+    await expect(page.locator('.chart-container, .chart-pane canvas').first()).toBeVisible()
+    // Drawing tools reappear.
+    await expect(page.locator('.toolbar button', { hasText: /^Band$/ })).toBeVisible()
+
+    if (errors.length) console.warn('CHART TOGGLE issues:', errors)
     expect(errors, errors.join('\n')).toHaveLength(0)
   })
 
