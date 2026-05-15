@@ -1,0 +1,220 @@
+//@version=5
+// ============================================================================
+// Champion (Adaptive Regime) — Pine Script port of backend/app/strategies/champion.py
+//
+// Three regimes:
+//   STRONG TREND (ADX > 30)  -> pullback continuation (EMA20 retest + RSI bounce)
+//   MILD TREND   (15 < ADX <= 30) -> breakout multi-confirmation (window high + vol + RSI room)
+//   PURE CHOP    (ADX <= 15) -> Bollinger + RSI extreme reversion to BB middle
+//
+// Universal filters across all regimes:
+//   * Volume >= 0.5x rolling 20-bar avg
+//   * ATR  >= 0.3% of price
+//   * ATR-based stop, capped 0.5%-2.5% of price
+//   * Per-regime RR (strong=2.5, mild=2.0, chop=2.0)
+//   * 6-bar cooldown between signals
+//
+// Mirrors Python params 1:1 (v10). Tuned for 1h or 4h.
+// ============================================================================
+indicator("★★★ Champion (Adaptive Regime)", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ===== Settings =====
+EMA_SHORT_LEN   = input.int(20,  "EMA Short",  group="Indicators")
+EMA_MID_LEN     = input.int(50,  "EMA Mid",    group="Indicators")
+EMA_LONG_LEN    = input.int(200, "EMA Long",   group="Indicators")
+RSI_LEN         = input.int(14,  "RSI Period", group="Indicators")
+ATR_LEN         = input.int(14,  "ATR Period", group="Indicators")
+ADX_LEN         = input.int(14,  "ADX Period", group="Indicators")
+BB_LEN          = input.int(20,  "BB Period",  group="Indicators")
+BB_MULT         = input.float(2.0, "BB Mult",  group="Indicators")
+LOOKBACK        = input.int(20,  "Window Lookback (vol avg + breakout)", group="Indicators")
+
+ADX_STRONG      = input.float(30.0, "ADX -> STRONG above", group="Regime")
+ADX_MILD        = input.float(15.0, "ADX -> MILD above (CHOP below)", group="Regime")
+
+ATR_MULT        = input.float(1.0,   "Stop = ATR x", group="Risk")
+STOP_PCT_MIN    = input.float(0.003, "Min stop % of price", step=0.001, group="Risk")
+STOP_PCT_MAX    = input.float(0.015, "Max stop % of price", step=0.001, group="Risk")
+REWARD_R_STRONG = input.float(2.5,   "RR — Strong trend",  group="Risk")
+REWARD_R_MILD   = input.float(2.0,   "RR — Mild trend",    group="Risk")
+REWARD_R_CHOP   = input.float(2.0,   "RR — Chop",          group="Risk")
+COOLDOWN_BARS   = input.int(6,       "Cooldown bars",      group="Risk")
+
+MIN_VOL_MULT    = input.float(0.5,   "Min volume vs 20-bar avg", group="Gates")
+MIN_ATR_PCT     = input.float(0.003, "Min ATR % of price",       group="Gates")
+
+PULLBACK_LB     = input.int(5,   "Pullback lookback bars",   group="Strong trend")
+PB_RSI_BUY_MAX  = input.float(45,  "Pullback BUY: RSI[-1] must be below", group="Strong trend")
+PB_RSI_SELL_MIN = input.float(55,  "Pullback SELL: RSI[-1] must be above", group="Strong trend")
+
+BO_VOL_MULT     = input.float(1.7,    "Breakout: volume >= avg x", group="Mild trend")
+BO_RSI_LONG_MAX = input.float(70,     "Breakout LONG: RSI below",  group="Mild trend")
+BO_RSI_SHORT_MIN= input.float(30,     "Breakout SHORT: RSI above", group="Mild trend")
+BO_MARGIN_PCT   = input.float(0.0015, "Breakout margin % over window", step=0.0001, group="Mild trend")
+
+CHOP_RSI_OS     = input.float(30, "Chop BUY: RSI oversold below",     group="Chop")
+CHOP_RSI_OB     = input.float(70, "Chop SELL: RSI overbought above",  group="Chop")
+
+SHOW_LINES      = input.bool(true, "Draw entry / SL / target lines", group="Display")
+SHOW_REGIME_BG  = input.bool(true, "Tint background by regime",      group="Display")
+SEND_ALERTS     = input.bool(true, "Fire alerts on signals",          group="Display")
+
+// ===== Indicators =====
+e20      = ta.ema(close, EMA_SHORT_LEN)
+e50      = ta.ema(close, EMA_MID_LEN)
+e200     = ta.ema(close, EMA_LONG_LEN)
+rsi_v    = ta.rsi(close, RSI_LEN)
+atr_v    = ta.atr(ATR_LEN)
+[diPlus, diMinus, adx_v] = ta.dmi(ADX_LEN, ADX_LEN)
+bb_basis = ta.sma(close, BB_LEN)
+bb_dev   = BB_MULT * ta.stdev(close, BB_LEN)
+bbu      = bb_basis + bb_dev
+bbm      = bb_basis
+bbl      = bb_basis - bb_dev
+avg_vol  = ta.sma(volume, LOOKBACK)
+
+// ===== State =====
+var int last_sig_bar = na
+
+// ===== Universal quality gates =====
+in_cooldown = not na(last_sig_bar) and (bar_index - last_sig_bar) < COOLDOWN_BARS
+vol_ok      = not na(avg_vol) and avg_vol > 0 and volume >= avg_vol * MIN_VOL_MULT
+atr_pct     = atr_v / close
+atr_ok      = atr_pct >= MIN_ATR_PCT
+gates_ok    = not in_cooldown and vol_ok and atr_ok and bar_index > 220
+
+// ===== Risk sizing — ATR-based stop, clamped to % of price =====
+stop_dist_raw = atr_v * ATR_MULT
+stop_dist     = math.min(math.max(stop_dist_raw, close * STOP_PCT_MIN), close * STOP_PCT_MAX)
+
+// ===== Regime classification (matches Python) =====
+ema50_above = e50 > e200
+ema50_below = e50 < e200
+bull_strong = close > e50 and ema50_above and adx_v > ADX_STRONG
+bear_strong = close < e50 and ema50_below and adx_v > ADX_STRONG
+bull_mild   = close > e50 and ema50_above and adx_v > ADX_MILD and adx_v <= ADX_STRONG
+bear_mild   = close < e50 and ema50_below and adx_v > ADX_MILD and adx_v <= ADX_STRONG
+is_chop     = adx_v <= ADX_MILD
+
+// Window over the PREVIOUS LOOKBACK bars (exclude current bar) -- matches
+// Python's candles[i - LOOKBACK : i].
+window_high = ta.highest(high[1], LOOKBACK)
+window_low  = ta.lowest(low[1], LOOKBACK)
+
+// ===== REGIME 1: STRONG TREND — pullback continuation =====
+// BUY: any of the last PULLBACK_LB+1 bars touched EMA20 from above, and
+// RSI made a higher value than the previous bar after being below 45.
+pullback_touched_buy = false
+for j = 0 to PULLBACK_LB
+    if not na(e20[j]) and low[j] <= e20[j]
+        pullback_touched_buy := true
+        break
+rsi_p_buy = rsi_v[1]
+rsi_bounce_buy = not na(rsi_p_buy) and rsi_p_buy < PB_RSI_BUY_MAX and rsi_v > rsi_p_buy
+strong_buy = gates_ok and bull_strong and pullback_touched_buy and rsi_bounce_buy
+
+// SELL: mirror — rally to EMA20 from below, RSI rolls down from above 55.
+rejection_touched_sell = false
+for j = 0 to PULLBACK_LB
+    if not na(e20[j]) and high[j] >= e20[j]
+        rejection_touched_sell := true
+        break
+rsi_p_sell = rsi_v[1]
+rsi_roll_sell = not na(rsi_p_sell) and rsi_p_sell > PB_RSI_SELL_MIN and rsi_v < rsi_p_sell
+strong_sell = gates_ok and bear_strong and rejection_touched_sell and rsi_roll_sell
+
+// ===== REGIME 2: MILD TREND — breakout multi-confirmation =====
+mild_buy  = gates_ok and bull_mild  and close > window_high * (1 + BO_MARGIN_PCT) and volume >= avg_vol * BO_VOL_MULT and rsi_v < BO_RSI_LONG_MAX
+mild_sell = gates_ok and bear_mild  and close < window_low  * (1 - BO_MARGIN_PCT) and volume >= avg_vol * BO_VOL_MULT and rsi_v > BO_RSI_SHORT_MIN
+
+// ===== REGIME 3: PURE CHOP — Bollinger + RSI reversion =====
+// BUY: prev close <= prev BBL, current close > BBL, prev RSI < 30.
+prev_rsi   = rsi_v[1]
+chop_buy   = gates_ok and is_chop and close[1] <= bbl[1] and close > bbl and not na(prev_rsi) and prev_rsi < CHOP_RSI_OS
+chop_sell  = gates_ok and is_chop and close[1] >= bbu[1] and close < bbu and not na(prev_rsi) and prev_rsi > CHOP_RSI_OB
+
+// ===== Signal aggregation =====
+// Pick first matching regime in priority order (strong > mild > chop). Same
+// as Python's continue-after-first-match flow.
+signal_type = strong_buy   ? "BUY_STRONG" :
+              strong_sell  ? "SELL_STRONG":
+              mild_buy     ? "BUY_MILD"   :
+              mild_sell    ? "SELL_MILD"  :
+              chop_buy     ? "BUY_CHOP"   :
+              chop_sell    ? "SELL_CHOP"  : "NONE"
+
+is_buy  = signal_type == "BUY_STRONG"  or signal_type == "BUY_MILD"  or signal_type == "BUY_CHOP"
+is_sell = signal_type == "SELL_STRONG" or signal_type == "SELL_MILD" or signal_type == "SELL_CHOP"
+fired   = is_buy or is_sell
+
+// Per-regime RR multiplier.
+rr_mult = (signal_type == "BUY_STRONG" or signal_type == "SELL_STRONG") ? REWARD_R_STRONG :
+          (signal_type == "BUY_MILD"   or signal_type == "SELL_MILD")   ? REWARD_R_MILD   :
+                                                                         REWARD_R_CHOP
+
+// Entry / SL / Target for the CURRENT bar's signal.
+entry_px  = close
+stop_px   = is_buy  ? close - stop_dist : is_sell ? close + stop_dist : na
+target_px = is_buy  ? close + stop_dist * rr_mult :
+            is_sell ? close - stop_dist * rr_mult : na
+
+// Chop additionally clamps the target to BB middle so we don't fight the range.
+if signal_type == "BUY_CHOP"
+    target_px := math.max(bbm, target_px)
+if signal_type == "SELL_CHOP"
+    target_px := math.min(bbm, target_px)
+
+// Update cooldown state.
+if fired
+    last_sig_bar := bar_index
+
+// ===== Visuals =====
+plotshape(is_buy,  title="BUY",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.lime,  0), size=size.small, text="BUY")
+plotshape(is_sell, title="SELL", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,   0), size=size.small, text="SELL")
+
+// Three dashed horizontal lines that extend 20 bars to the right of the
+// signal candle so the user can eyeball the trade.
+if SHOW_LINES and fired
+    end_bar = bar_index + 20
+    line.new(bar_index, entry_px,  end_bar, entry_px,  color=color.new(color.yellow, 20), width=1, style=line.style_dashed)
+    line.new(bar_index, stop_px,   end_bar, stop_px,   color=color.new(color.red,    20), width=1, style=line.style_dashed)
+    line.new(bar_index, target_px, end_bar, target_px, color=color.new(color.green,  20), width=1, style=line.style_dashed)
+    rr_label = "RR 1:" + str.tostring(rr_mult, "#.0") + "  " + signal_type
+    label.new(bar_index, target_px, rr_label, style=label.style_label_left, color=color.new(color.gray, 70), textcolor=color.white, size=size.small)
+
+// Background tint helps you eyeball the regime at a glance without
+// switching to the indicator panel. Off by default for clean charts.
+bgcolor(SHOW_REGIME_BG and bull_strong ? color.new(color.green,  92) : na, title="Strong bull regime")
+bgcolor(SHOW_REGIME_BG and bear_strong ? color.new(color.red,    92) : na, title="Strong bear regime")
+bgcolor(SHOW_REGIME_BG and (bull_mild or bear_mild) ? color.new(color.blue,  93) : na, title="Mild trend regime")
+bgcolor(SHOW_REGIME_BG and is_chop     ? color.new(color.orange, 94) : na, title="Chop regime")
+
+// ===== Alerts =====
+// `alertcondition` is what TradingView's alert dialog reads to populate the
+// "Condition" dropdown. To wire one to our backend, point its webhook URL at
+// https://your-railway-domain/api/tv-webhook (endpoint not built yet -- ask
+// when you want it).
+alertcondition(is_buy,  title="Champion BUY",  message='{"strategy":"champion","type":"BUY","price":{{close}},"time":{{time}}}')
+alertcondition(is_sell, title="Champion SELL", message='{"strategy":"champion","type":"SELL","price":{{close}},"time":{{time}}}')
+
+// Convenient table in the top-right corner to confirm the current regime
+// and the values that triggered (or blocked) the latest evaluation.
+var table info = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    regime_str = bull_strong ? "BULL_STRONG" :
+                 bear_strong ? "BEAR_STRONG" :
+                 bull_mild   ? "BULL_MILD"   :
+                 bear_mild   ? "BEAR_MILD"   :
+                 is_chop     ? "CHOP"        : "neutral"
+    table.cell(info, 0, 0, "Regime",   bgcolor=color.new(color.gray, 80), text_color=color.white)
+    table.cell(info, 1, 0, regime_str, bgcolor=color.new(color.gray, 80), text_color=color.white)
+    table.cell(info, 0, 1, "ADX",      bgcolor=color.new(color.gray, 90))
+    table.cell(info, 1, 1, str.tostring(adx_v, "#.0"), bgcolor=color.new(color.gray, 90))
+    table.cell(info, 0, 2, "RSI",      bgcolor=color.new(color.gray, 90))
+    table.cell(info, 1, 2, str.tostring(rsi_v, "#.0"), bgcolor=color.new(color.gray, 90))
+    table.cell(info, 0, 3, "ATR %",    bgcolor=color.new(color.gray, 90))
+    table.cell(info, 1, 3, str.tostring(atr_pct * 100, "#.00") + "%", bgcolor=color.new(color.gray, 90))
+    table.cell(info, 0, 4, "Vol/avg",  bgcolor=color.new(color.gray, 90))
+    table.cell(info, 1, 4, str.tostring(volume / nz(avg_vol, 1), "#.00") + "x", bgcolor=color.new(color.gray, 90))
+    table.cell(info, 0, 5, "Cooldown", bgcolor=color.new(color.gray, 90))
+    table.cell(info, 1, 5, in_cooldown ? "YES" : "no", bgcolor=color.new(color.gray, 90), text_color=in_cooldown ? color.red : color.green)
