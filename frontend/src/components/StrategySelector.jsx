@@ -19,6 +19,10 @@ const CATEGORIES = [
     ids: ['smc_mtf', 'smc_trend_liq', 'smc_momentum'],
   },
   {
+    label: '📊 Price Action (pure candle structure — no indicators)',
+    ids: ['price_action'],
+  },
+  {
     label: '📈 Trend Following (jab trend strong ho)',
     ids: ['trend_following', 'day_trading', 'adx_trend', 'macd', 'supertrend', 'ichimoku'],
   },

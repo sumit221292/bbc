@@ -105,23 +105,34 @@ function StrategyOverview({ data, selectedId, onSelect }) {
         </div>
 
         {showCategory ? (
-          // Grouped by category (original layout)
-          ['Recommended (Multi-TF)', 'Selective', 'Smart Money', 'Trend', 'Mean Reversion', 'Breakout', 'Other'].map(cat => {
-            const catRows = rows.filter(r => r.category === cat)
-            if (catRows.length === 0) return null
-            return (
-              <div key={cat}>
-                <div className="ov-cat">{cat}</div>
-                {catRows.map(r => (
-                  <StrategyRow
-                    key={r.id} row={r}
-                    selected={selectedId === r.id}
-                    onSelect={onSelect}
-                  />
-                ))}
-              </div>
-            )
-          })
+          // Grouped by category. We derive categories from the data itself
+          // (rather than a hardcoded list) so any new backend category --
+          // e.g. "Price Action" -- shows up automatically. Display order
+          // pins the strongest signals first, then alphabetical for the rest.
+          (() => {
+            const PIN_ORDER = ['Recommended (Multi-TF)', 'Champion', 'Selective', 'Smart Money', 'Price Action']
+            const present = [...new Set(rows.map(r => r.category))]
+            const ordered = [
+              ...PIN_ORDER.filter(c => present.includes(c)),
+              ...present.filter(c => !PIN_ORDER.includes(c)).sort(),
+            ]
+            return ordered.map(cat => {
+              const catRows = rows.filter(r => r.category === cat)
+              if (catRows.length === 0) return null
+              return (
+                <div key={cat}>
+                  <div className="ov-cat">{cat}</div>
+                  {catRows.map(r => (
+                    <StrategyRow
+                      key={r.id} row={r}
+                      selected={selectedId === r.id}
+                      onSelect={onSelect}
+                    />
+                  ))}
+                </div>
+              )
+            })
+          })()
         ) : (
           // Flat list (sorted by PnL or win rate)
           rows.length === 0 ? (
