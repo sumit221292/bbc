@@ -135,28 +135,42 @@ chop_sell  = gates_ok and is_chop and close[1] >= bbu[1] and close < bbu and not
 
 // ===== Signal aggregation =====
 // Pick first matching regime in priority order (strong > mild > chop). Same
-// as Python's continue-after-first-match flow.
-signal_type = strong_buy   ? "BUY_STRONG" :
-              strong_sell  ? "SELL_STRONG":
-              mild_buy     ? "BUY_MILD"   :
-              mild_sell    ? "SELL_MILD"  :
-              chop_buy     ? "BUY_CHOP"   :
-              chop_sell    ? "SELL_CHOP"  : "NONE"
+// as Python's continue-after-first-match flow. Pine v5 does not parse
+// multi-line `?:` chains without parens, so build via successive if/else
+// reassignments -- equally readable, zero ambiguity for the parser.
+string signal_type = "NONE"
+if strong_buy
+    signal_type := "BUY_STRONG"
+else if strong_sell
+    signal_type := "SELL_STRONG"
+else if mild_buy
+    signal_type := "BUY_MILD"
+else if mild_sell
+    signal_type := "SELL_MILD"
+else if chop_buy
+    signal_type := "BUY_CHOP"
+else if chop_sell
+    signal_type := "SELL_CHOP"
 
 is_buy  = signal_type == "BUY_STRONG"  or signal_type == "BUY_MILD"  or signal_type == "BUY_CHOP"
 is_sell = signal_type == "SELL_STRONG" or signal_type == "SELL_MILD" or signal_type == "SELL_CHOP"
 fired   = is_buy or is_sell
 
 // Per-regime RR multiplier.
-rr_mult = (signal_type == "BUY_STRONG" or signal_type == "SELL_STRONG") ? REWARD_R_STRONG :
-          (signal_type == "BUY_MILD"   or signal_type == "SELL_MILD")   ? REWARD_R_MILD   :
-                                                                         REWARD_R_CHOP
+float rr_mult = REWARD_R_CHOP
+if signal_type == "BUY_STRONG" or signal_type == "SELL_STRONG"
+    rr_mult := REWARD_R_STRONG
+else if signal_type == "BUY_MILD" or signal_type == "SELL_MILD"
+    rr_mult := REWARD_R_MILD
 
 // Entry / SL / Target for the CURRENT bar's signal.
 entry_px  = close
-stop_px   = is_buy  ? close - stop_dist : is_sell ? close + stop_dist : na
-target_px = is_buy  ? close + stop_dist * rr_mult :
-            is_sell ? close - stop_dist * rr_mult : na
+stop_px   = is_buy ? close - stop_dist : is_sell ? close + stop_dist : na
+float target_px = na
+if is_buy
+    target_px := close + stop_dist * rr_mult
+else if is_sell
+    target_px := close - stop_dist * rr_mult
 
 // Chop additionally clamps the target to BB middle so we don't fight the range.
 if signal_type == "BUY_CHOP"
@@ -201,11 +215,17 @@ alertcondition(is_sell, title="Champion SELL", message='{"strategy":"champion","
 // and the values that triggered (or blocked) the latest evaluation.
 var table info = table.new(position.top_right, 2, 6, border_width=1)
 if barstate.islast
-    regime_str = bull_strong ? "BULL_STRONG" :
-                 bear_strong ? "BEAR_STRONG" :
-                 bull_mild   ? "BULL_MILD"   :
-                 bear_mild   ? "BEAR_MILD"   :
-                 is_chop     ? "CHOP"        : "neutral"
+    string regime_str = "neutral"
+    if bull_strong
+        regime_str := "BULL_STRONG"
+    else if bear_strong
+        regime_str := "BEAR_STRONG"
+    else if bull_mild
+        regime_str := "BULL_MILD"
+    else if bear_mild
+        regime_str := "BEAR_MILD"
+    else if is_chop
+        regime_str := "CHOP"
     table.cell(info, 0, 0, "Regime",   bgcolor=color.new(color.gray, 80), text_color=color.white)
     table.cell(info, 1, 0, regime_str, bgcolor=color.new(color.gray, 80), text_color=color.white)
     table.cell(info, 0, 1, "ADX",      bgcolor=color.new(color.gray, 90))
