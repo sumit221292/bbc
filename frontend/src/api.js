@@ -95,3 +95,18 @@ export async function killAutoTrade() {
   const r = await fetch(`${BASE}/api/alerts/auto/kill`, { method: 'POST' })
   return r.json().catch(() => ({ ok: false }))
 }
+
+export async function getTrades({ strategy, interval, limit = 200 } = {}) {
+  const params = new URLSearchParams()
+  if (strategy) params.set('strategy', strategy)
+  if (interval) params.set('interval', interval)
+  params.set('limit', String(limit))
+  const r = await fetch(`${BASE}/api/trades?${params.toString()}`)
+  if (!r.ok) throw new Error(`trades: ${r.status}`)
+  return r.json()
+}
+
+export async function clearTrades() {
+  const r = await fetch(`${BASE}/api/trades`, { method: 'DELETE' })
+  return r.json().catch(() => ({ ok: false }))
+}

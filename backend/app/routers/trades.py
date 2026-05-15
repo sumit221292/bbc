@@ -1,0 +1,32 @@
+"""Trade history API — only persists alert-worker signals (no backtest noise)."""
+from fastapi import APIRouter, Query
+
+from .. import trade_store
+
+router = APIRouter(prefix="/api/trades", tags=["trades"])
+
+
+@router.get("")
+async def list_trades(
+    strategy: str | None = Query(default=None),
+    interval: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=2000),
+):
+    """Most-recent-first list. When both strategy + interval are given the
+    response is exactly the trades a user would see for that view."""
+    rows = trade_store.list_trades(strategy_id=strategy, interval=interval, limit=limit)
+    summary = trade_store.stats(strategy_id=strategy, interval=interval)
+    return {"trades": rows, "summary": summary}
+
+
+@router.get("/stats")
+async def all_stats():
+    """Per-(strategy, interval) summary. Drives any leaderboard view."""
+    return {"groups": trade_store.per_strategy_stats()}
+
+
+@router.delete("")
+async def clear_trades():
+    """Wipe the history. Useful after schema changes or for the user's reset."""
+    n = trade_store.clear_all()
+    return {"ok": True, "removed": n}

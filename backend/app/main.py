@@ -18,6 +18,8 @@ from .binance import stream_klines
 from .config import settings
 from .routers import alerts as alerts_router
 from .routers import market, outlook, strategy
+from .routers import trades as trades_router
+from . import trade_store
 
 log = logging.getLogger("btc")
 
@@ -36,11 +38,13 @@ app.include_router(market.router)
 app.include_router(strategy.router)
 app.include_router(outlook.router)
 app.include_router(alerts_router.router)
+app.include_router(trades_router.router)
 
 
 @app.on_event("startup")
 async def _start_alert_worker():
     """Always-on Telegram notification worker."""
+    trade_store.init_db()
     app.state.alert_task = asyncio.create_task(alert_loop())
 
 

@@ -26,3 +26,12 @@ dist/
 
 # OS
 Thumbs.db
+
+# SQLite — trade history is built up by the live worker; ship empty
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Persisted alert config (contains secrets / chat ids)
+backend/alerts_config.json

@@ -35,6 +35,7 @@ from .strategies import (
     run_mtf, run_smc_mtf,
 )
 from .trade_status import annotate
+from . import trade_store
 
 log = logging.getLogger("btc.alerts")
 
@@ -287,7 +288,8 @@ def _format_closure(symbol: str, name: str, pending: PendingSignal, sig) -> str:
 
 
 async def _evaluate_subscription(sub: Subscription, symbol: str):
-    """Returns (latest_open_signal_or_None, full_signals_list, strategy_name)."""
+    """Returns (latest_open_signal_or_None, full_signals_list, strategy_name,
+    resolved_interval)."""
     sid = sub.strategy_id
     interval = sub.interval or _default_interval(sid)
     name = _strategy_name(sid)
@@ -314,7 +316,7 @@ async def _evaluate_subscription(sub: Subscription, symbol: str):
         signals = annotate(strat.evaluate(candles), candles)
 
     open_signals = [s for s in signals if s.status == "OPEN"]
-    return (open_signals[-1] if open_signals else None), signals, name
+    return (open_signals[-1] if open_signals else None), signals, name, interval
 
 
 def _utc_midnight(ts: int) -> int:
@@ -513,10 +515,32 @@ async def alert_loop():
                 changed = False
                 for sub in cfg.subscriptions:
                     try:
-                        latest, all_signals, name = await _evaluate_subscription(sub, cfg.symbol)
+                        latest, all_signals, name, interval = await _evaluate_subscription(sub, cfg.symbol)
                     except Exception as e:
                         log.warning("eval %s failed: %s", sub.strategy_id, e)
                         continue
+
+                    # Persist closures for any DB-tracked open trades on this
+                    # (strategy, interval) that have since resolved. Done first
+                    # so the Recent Trades panel reflects outcomes regardless
+                    # of whether a Telegram closure alert was queued.
+                    try:
+                        for row in trade_store.open_trades(sub.strategy_id, interval):
+                            match = next((s for s in all_signals if s.time == row["signal_time"]), None)
+                            if match is None or match.status not in ("WIN", "LOSS"):
+                                continue
+                            exit_price = match.target if match.status == "WIN" else match.stop_loss
+                            trade_store.close_trade(
+                                strategy_id=sub.strategy_id,
+                                interval=interval,
+                                signal_time=row["signal_time"],
+                                status=match.status,
+                                exit_price=float(exit_price) if exit_price is not None else 0.0,
+                                exit_time=int(match.closed_at or 0),
+                                pnl_pct=float(match.pnl_pct or 0.0),
+                            )
+                    except Exception:
+                        log.exception("trade_store close pass failed for %s", sub.strategy_id)
 
                     # 1. Closure check — was a previously-notified trade resolved?
                     pending = cfg.pending_close.get(sub.strategy_id)
@@ -568,6 +592,23 @@ async def alert_loop():
                                     entry=latest.entry, stop=latest.stop_loss,
                                     target=latest.target,
                                 )
+                                # Persist the trade — INSERT OR IGNORE keeps
+                                # this idempotent if the loop re-broadcasts.
+                                try:
+                                    trade_store.insert_trade(
+                                        strategy_id=sub.strategy_id,
+                                        interval=interval,
+                                        symbol=cfg.symbol,
+                                        signal_time=latest.time,
+                                        type_=latest.type,
+                                        entry=float(latest.entry),
+                                        stop_loss=float(latest.stop_loss),
+                                        target=float(latest.target),
+                                        reason=str(latest.reason or ""),
+                                        created_at=int(time.time()),
+                                    )
+                                except Exception:
+                                    log.exception("trade_store insert failed for %s", sub.strategy_id)
                             changed = True
                             log.info("sent alert for %s @ %s", sub.strategy_id, latest.time)
                         else:

@@ -1,4 +1,5 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
+import { getTrades } from '../api.js'
 
 function fmt(n, d = 2) {
   return n == null ? '—' : Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
@@ -110,9 +111,33 @@ function TradeCard({ trade, livePrice, index }) {
   )
 }
 
-function SignalPanel({ result, livePrice, strategies = [] }) {
+function SignalPanel({ result, livePrice, strategies = [], interval }) {
+  // Live-persisted trades from the SQLite store, scoped to the current
+  // (strategy, interval) pair. Backtest signals from `result.signals` only
+  // power the analytical Live Trade card; the Recent Trades history now
+  // reflects what the always-on worker actually fired and what's resolved.
+  const [stored, setStored] = useState({ trades: [], summary: null })
+  const strategyId = result?.strategy
+
+  useEffect(() => {
+    if (!strategyId || !interval) return
+    let cancelled = false
+    const fetchOnce = async () => {
+      try {
+        const data = await getTrades({ strategy: strategyId, interval, limit: 50 })
+        if (!cancelled) setStored(data)
+      } catch {
+        // swallow — DB may be empty after a fresh deploy
+      }
+    }
+    fetchOnce()
+    const t = setInterval(fetchOnce, 30_000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [strategyId, interval])
+
   if (!result) return <div className="signal-panel"><div className="muted">Loading…</div></div>
-  const { latest, signals, summary, strategy: strategyId } = result
+  const { latest, signals, strategy: _sid } = result
+  const summary = stored.summary ?? result.summary
   const strategyMeta = strategies.find(s => s.id === strategyId)
   const strategyName = strategyMeta?.name || strategyId || ''
 
@@ -181,20 +206,30 @@ function SignalPanel({ result, livePrice, strategies = [] }) {
       )}
 
       <div className="history">
-        <div className="title">📜 Recent Trades from {strategyName} (last 15)</div>
+        <div className="title">
+          📜 Recent Trades — {strategyName} · {interval || '—'}
+          {stored.trades.length > 0 && (
+            <span className="muted small"> (saved {stored.trades.length})</span>
+          )}
+        </div>
         <ul>
-          {signals.slice(-15).reverse().map(s => (
-            <li key={`${s.time}-${s.type}`}>
-              <span className={`badge sm ${s.type === 'BUY' ? 'buy' : 'sell'}`}>{s.type}</span>
-              <StatusBadge status={s.status} />
-              <span className="px">${fmt(s.price)}</span>
-              {s.pnl_pct != null && (
-                <span className={`pnl sm ${s.pnl_pct >= 0 ? 'pos' : 'neg'}`}>{pct(s.pnl_pct)}</span>
+          {stored.trades.map(t => (
+            <li key={`${t.id}`}>
+              <span className={`badge sm ${t.type === 'BUY' ? 'buy' : 'sell'}`}>{t.type}</span>
+              <StatusBadge status={t.status} />
+              <span className="px">${fmt(t.entry)}</span>
+              {t.pnl_pct != null && t.status !== 'OPEN' && (
+                <span className={`pnl sm ${t.pnl_pct >= 0 ? 'pos' : 'neg'}`}>{pct(t.pnl_pct)}</span>
               )}
-              <span className="muted small">{new Date(s.time * 1000).toLocaleString()}</span>
+              <span className="muted small">{new Date(t.signal_time * 1000).toLocaleString()}</span>
             </li>
           ))}
-          {signals.length === 0 && <li className="muted">Abhi koi trade nahi liya — strategy selective hai, signal aane par dikhega.</li>}
+          {stored.trades.length === 0 && (
+            <li className="muted">
+              Abhi koi live trade save nahi hua — alert worker se naya signal aate hi yaha
+              dikhega ({strategyName} · {interval || '—'}).
+            </li>
+          )}
         </ul>
       </div>
     </div>
