@@ -34,6 +34,7 @@ from .strategies import (
     get_strategy, is_mtf, is_smc_mtf, list_mtf_metas, list_strategies,
     run_mtf, run_smc_mtf,
 )
+from .schemas import Signal
 from .trade_status import annotate
 from . import trade_store
 
@@ -307,7 +308,14 @@ def _format_closure(symbol: str, name: str, pending: PendingSignal, sig) -> str:
 
 async def _evaluate_subscription(sub: Subscription, symbol: str):
     """Returns (latest_open_signal_or_None, full_signals_list, strategy_name,
-    resolved_interval)."""
+    resolved_interval, entry_tf_candles).
+
+    `entry_tf_candles` are the candles that the strategy's signals are
+    indexed on (5m for SMC MTF, 1h for other MTFs, the user's interval
+    otherwise). The close-pass needs them so it can resolve DB-tracked
+    open trades by building a synthetic Signal and running annotate, even
+    when the strategy itself no longer re-emits at that bar (e.g. when
+    rolling support/resistance levels shifted)."""
     sid = sub.strategy_id
     interval = sub.interval or _default_interval(sid)
     name = _strategy_name(sid)
@@ -320,6 +328,7 @@ async def _evaluate_subscription(sub: Subscription, symbol: str):
         )
         ctx = SMCMTFContext(candles_5m=c5, candles_15m=c15, candles_1h=c1h)
         signals = annotate(run_smc_mtf(sid, ctx, start_idx=60), c5)
+        entry_candles = c5
     elif is_mtf(sid):
         c1h, c4h, c1d = await asyncio.gather(
             fetch_klines(symbol, "1h", 1000),
@@ -328,13 +337,15 @@ async def _evaluate_subscription(sub: Subscription, symbol: str):
         )
         ctx = MTFContext(candles_1h=c1h, candles_4h=c4h, candles_1d=c1d)
         signals = annotate(run_mtf(sid, ctx, start_idx=50), c1h)
+        entry_candles = c1h
     else:
         strat = get_strategy(sid)
         candles = await fetch_klines(symbol, interval, 500)
         signals = annotate(strat.evaluate(candles), candles)
+        entry_candles = candles
 
     open_signals = [s for s in signals if s.status == "OPEN"]
-    return (open_signals[-1] if open_signals else None), signals, name, interval
+    return (open_signals[-1] if open_signals else None), signals, name, interval, entry_candles
 
 
 def _utc_midnight(ts: int) -> int:
@@ -533,29 +544,51 @@ async def alert_loop():
                 changed = False
                 for sub in cfg.subscriptions:
                     try:
-                        latest, all_signals, name, interval = await _evaluate_subscription(sub, cfg.symbol)
+                        latest, all_signals, name, interval, entry_candles = await _evaluate_subscription(sub, cfg.symbol)
                     except Exception as e:
                         log.warning("eval %s failed: %s", sub.strategy_id, e)
                         continue
 
-                    # Persist closures for any DB-tracked open trades on this
-                    # (strategy, interval) that have since resolved. Done first
-                    # so the Recent Trades panel reflects outcomes regardless
-                    # of whether a Telegram closure alert was queued.
+                    # Persist closures for any DB-tracked open trade on this
+                    # (strategy, interval, symbol) that has since resolved.
+                    # We rebuild a synthetic Signal from the DB row and walk
+                    # it through annotate against the entry-TF candles --
+                    # this is independent of whether the strategy still
+                    # re-emits at the same bar (rolling indicators can shift
+                    # and stop emitting the signal even though the trade is
+                    # still alive in the DB).
                     try:
                         for row in trade_store.open_trades(sub.strategy_id, interval, cfg.symbol):
-                            match = next((s for s in all_signals if s.time == row["signal_time"]), None)
-                            if match is None or match.status not in ("WIN", "LOSS"):
+                            synth = Signal(
+                                time=row["signal_time"],
+                                type=row["type"],
+                                price=row["entry"],
+                                reason=row.get("reason") or "",
+                                entry=row["entry"],
+                                stop_loss=row["stop_loss"],
+                                target=row["target"],
+                            )
+                            resolved = annotate([synth], entry_candles)[0]
+                            if resolved.status not in ("WIN", "LOSS"):
                                 continue
-                            exit_price = match.target if match.status == "WIN" else match.stop_loss
+                            exit_price = (
+                                resolved.target if resolved.status == "WIN"
+                                else resolved.stop_loss
+                            )
                             trade_store.close_trade(
                                 strategy_id=sub.strategy_id,
                                 interval=interval,
                                 signal_time=row["signal_time"],
-                                status=match.status,
+                                status=resolved.status,
                                 exit_price=float(exit_price) if exit_price is not None else 0.0,
-                                exit_time=int(match.closed_at or 0),
-                                pnl_pct=float(match.pnl_pct or 0.0),
+                                exit_time=int(resolved.closed_at or 0),
+                                pnl_pct=float(resolved.pnl_pct or 0.0),
+                            )
+                            changed = True
+                            log.info(
+                                "[CLOSED] %s %s @ %s -> %s pnl=%.2f%%",
+                                sub.strategy_id, row["type"], row["signal_time"],
+                                resolved.status, resolved.pnl_pct or 0.0,
                             )
                     except Exception:
                         log.exception("trade_store close pass failed for %s", sub.strategy_id)
