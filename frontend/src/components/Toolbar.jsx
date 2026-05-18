@@ -23,6 +23,7 @@ function Toolbar({
   drawMode, onDrawModeChange,
   onClearDrawings,
   chartMode, onChartModeChange,
+  chartVisible, onChartVisibleChange,
 }) {
   const tvActive = chartMode === 'tradingview'
   return (
@@ -55,6 +56,19 @@ function Toolbar({
             title="TradingView widget — full indicator suite, no signal overlay"
           >TradingView</button>
         </div>
+      </div>
+      <div className="group">
+        <label>View</label>
+        <button
+          className={`view-toggle ${chartVisible ? '' : 'collapsed'}`}
+          onClick={() => onChartVisibleChange(!chartVisible)}
+          title={chartVisible
+            ? 'Hide chart — focus only on the signal sidebar'
+            : 'Show chart again'
+          }
+        >
+          {chartVisible ? '⤢ Hide Chart' : '⤡ Show Chart'}
+        </button>
       </div>
       {/* Drawing tools only make sense for the native chart. Hide when on
           TradingView mode so the user is not confused by inert buttons. */}

@@ -31,6 +31,10 @@ export default function App() {
   // 'native' = our Lightweight Charts with signal markers + SL/TP lines.
   // 'tradingview' = official Advanced Chart widget (no signal overlay).
   const [chartMode, setChartMode] = usePersistedState('btc.chartMode', 'native')
+  // Collapse the chart pane entirely when the user wants to focus on the
+  // signal sidebar (Live / All / Best / Alerts). Persisted so refresh keeps
+  // the layout intent.
+  const [chartVisible, setChartVisible] = usePersistedState('btc.chartVisible', true)
 
   // Telegram alerts now run on the backend (always-on); the AlertsTab
   // talks directly to /api/alerts/config so we don't need state here.
@@ -231,6 +235,7 @@ export default function App() {
         drawMode={drawMode} onDrawModeChange={setDrawMode}
         onClearDrawings={onClearDrawings}
         chartMode={chartMode} onChartModeChange={setChartMode}
+        chartVisible={chartVisible} onChartVisibleChange={setChartVisible}
       />
 
       <StrategySelector
@@ -242,15 +247,23 @@ export default function App() {
       {error && <div className="error">{error}</div>}
 
       <main
-        className="main"
-        style={{ gridTemplateColumns: `minmax(0, 1fr) 6px ${sidebarWidth || 380}px` }}
+        className={`main ${chartVisible ? '' : 'chart-collapsed'}`}
+        style={{
+          gridTemplateColumns: chartVisible
+            ? `minmax(0, 1fr) 6px ${sidebarWidth || 380}px`
+            : 'minmax(0, 1fr)',
+        }}
       >
-        <section className="chart-pane">
-          {chartMode === 'tradingview'
-            ? <TradingViewChart symbol={symbol} interval={interval} />
-            : <Chart ref={chartRef} />}
-        </section>
-        <Resizer current={sidebarWidth} onResize={setSidebarWidth} />
+        {chartVisible && (
+          <>
+            <section className="chart-pane">
+              {chartMode === 'tradingview'
+                ? <TradingViewChart symbol={symbol} interval={interval} />
+                : <Chart ref={chartRef} />}
+            </section>
+            <Resizer current={sidebarWidth} onResize={setSidebarWidth} />
+          </>
+        )}
         <aside className="side-pane">
           <div className="tabs">
             {tabs.map(t => (
