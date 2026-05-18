@@ -1,6 +1,8 @@
 import { memo } from 'react'
 
-const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d']
+// Restricted to 1h+ -- lower TFs are too noisy for the strategy suite,
+// and the worker stores all live trades at 1h/4h/1d partitions.
+const INTERVALS = ['1h', '4h', '1d']
 // Binance is crypto-only — XAUUSDT (spot gold) doesn't exist there.
 // PAXGUSDT (Pax Gold, a 1:1 gold-backed token) tracks gold price tick-for-tick
 // and is the proper way to chart "gold" through Binance.

@@ -43,18 +43,24 @@ export default function App() {
     getStrategies().then(setStrategies).catch(e => setError(String(e)))
   }, [])
 
-  // Auto-switch chart timeframe when the user picks a strategy that's
-  // designed for a specific TF, otherwise the markers won't line up.
-  //   - mtf_*       runs on 1h candles
-  //   - smc_mtf     runs on 5m candles (entry TF)
-  //   - smc_momentum is tuned for 5m / 15m
+  // The app is restricted to 1h / 4h / 1d. Sanitise persisted localStorage
+  // state on mount so users who saved an old 5m / 15m interval or a removed
+  // strategy (smc_mtf, smc_momentum) get a working default instead of a
+  // 404 from the API.
+  useEffect(() => {
+    const ALLOWED_INTERVALS = ['1h', '4h', '1d']
+    const REMOVED_STRATEGIES = ['smc_mtf', 'smc_momentum']
+    if (!ALLOWED_INTERVALS.includes(interval)) setInterval('1h')
+    if (REMOVED_STRATEGIES.includes(strategyId)) setStrategyId('mtf_chop_aware')
+    // run once on first mount only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Auto-switch chart timeframe when the user picks an MTF strategy that is
+  // tuned for 1h triggers, so the markers line up with the worker storage.
   useEffect(() => {
     if (strategyId.startsWith('mtf_') && !['1h', '4h', '1d'].includes(interval)) {
       setInterval('1h')
-    } else if (strategyId === 'smc_mtf' && interval !== '5m') {
-      setInterval('5m')
-    } else if (strategyId === 'smc_momentum' && !['5m', '15m'].includes(interval)) {
-      setInterval('15m')
     }
     // intentionally not depending on `interval` — only react to strategy switches
     // eslint-disable-next-line react-hooks/exhaustive-deps

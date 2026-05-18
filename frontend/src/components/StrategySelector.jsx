@@ -15,8 +15,8 @@ const CATEGORIES = [
     ids: ['best'],
   },
   {
-    label: '🧠 Smart Money (ICT/SMC concepts — 5m/15m)',
-    ids: ['smc_mtf', 'smc_trend_liq', 'smc_momentum'],
+    label: '🧠 Smart Money (ICT/SMC concepts — 1h)',
+    ids: ['smc_trend_liq'],
   },
   {
     label: '📊 Price Action (pure candle structure — no indicators)',

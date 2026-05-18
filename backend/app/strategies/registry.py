@@ -17,15 +17,17 @@ from .donchian_turtle import DonchianTurtle
 from .ichimoku_cross import IchimokuCross
 from .stochastic_rev import StochasticReversal
 from .adx_trend import ADXTrend
-from .smc_momentum import SMCMomentum
 from .champion import Champion
 from .price_action import PriceAction
+# SMCMomentum is intentionally not registered -- it's tuned for 5m/15m and the
+# app is restricted to 1h/4h/1d. The class stays in smc_momentum.py for reuse
+# if the policy changes later.
 
 
 # 'champion' first so it's the most prominent in the UI.
 _STRATEGIES: dict[str, type[Strategy]] = {
     cls.id: cls for cls in (
-        Champion, BestTrade, SMCMomentum, PriceAction,
+        Champion, BestTrade, PriceAction,
         ScalpingRSI, DayTradingEMACross, SwingSRBounce, TrendFollowing, Breakout,
         MACDCross, BollingerReversion, SuperTrendFlip, DonchianTurtle,
         IchimokuCross, StochasticReversal, ADXTrend,

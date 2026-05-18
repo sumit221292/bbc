@@ -57,16 +57,10 @@ _MTF_REGISTRY: dict[str, tuple[str, str, Callable[[MTFContext, int], list[Signal
         "Runs on 1h candles.",
         evaluate_smc_trend_liq,
     ),
-    # SMC MTF uses different timeframes (5m/15m/1h) and a different context
-    # type. The router dispatches it through a separate code path -- see
-    # is_smc_mtf() below.
-    "smc_mtf": (
-        "🧠 SMC MTF (5m + 15m + 1h)",
-        "Top-down ICT/SMC: 1h trend bias, 15m FVG/Order-Block zones, "
-        "5m entry trigger (400-pt impulse + RSI reversal or liquidity sweep). "
-        "Most selective SMC variant -- expect few but high-quality signals.",
-        evaluate_smc_mtf,  # signature differs (takes SMCMTFContext) -- handled by run_smc_mtf
-    ),
+    # NOTE: smc_mtf (5m/15m/1h SMC) is intentionally NOT exposed here. The
+    # whole app is restricted to 1h/4h/1d trading, so a 5m-trigger strategy
+    # has no home in the UI. The evaluator + context type are still imported
+    # so the code path stays alive if it is ever re-enabled.
 }
 
 
