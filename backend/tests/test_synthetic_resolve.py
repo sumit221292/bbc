@@ -162,6 +162,35 @@ def scenario_still_open_when_neither_hit():
     print(f"    OK -- OPEN preserved when neither stop nor target hit")
 
 
+def scenario_all_open_trades_returns_orphans():
+    """The orphan-resolve path scans all OPEN rows regardless of which
+    strategies are currently subscribed. trade_store.all_open_trades()
+    must therefore return rows from any strategy as long as status='OPEN'."""
+    print("[5] all_open_trades() surfaces unsubscribed orphans")
+    # Pretend this strategy is no longer subscribed; the row must still appear.
+    trade_store.insert_trade(
+        strategy_id="unsubscribed_strat", interval="1h", symbol="BTCUSDT",
+        signal_time=5000, type_="BUY", entry=100, stop_loss=95, target=110,
+        reason="orphan", created_at=5000,
+    )
+    rows = trade_store.all_open_trades()
+    orphan = next((r for r in rows if r["strategy_id"] == "unsubscribed_strat"), None)
+    if orphan is None:
+        fail("all_open_trades() must include orphan rows")
+    if orphan["status"] != "OPEN":
+        fail(f"orphan should still be OPEN, got {orphan['status']}")
+    # Close it via the synth-resolve path even though the strategy was never
+    # subscribed/iterated.
+    candles = [
+        C(5000, 100, 101, 99, 100),
+        C(5060, 100, 102, 94, 96),    # low pierces stop -> LOSS
+    ]
+    resolved = synth_resolve_one(orphan, candles)
+    if resolved.status != "LOSS":
+        fail(f"orphan should resolve LOSS, got {resolved.status}")
+    print("    OK -- orphan trade visible and resolvable independent of subscription state")
+
+
 def scenario_symbol_isolation():
     print("[4] open_trades() honours symbol filter")
     trade_store.insert_trade(
@@ -193,8 +222,9 @@ def main():
         scenario_buy_target_hit_after_strategy_silent()   # BUY -> WIN
         scenario_sell_stop_hit_after_strategy_silent()    # SELL -> LOSS
         scenario_still_open_when_neither_hit()
+        scenario_all_open_trades_returns_orphans()
         scenario_symbol_isolation()
-        print("\nALL 6 SCENARIOS PASSED")
+        print("\nALL 7 SCENARIOS PASSED")
         return 0
     except AssertionError as e:
         print(f"\nFAIL: {e}", file=sys.stderr)

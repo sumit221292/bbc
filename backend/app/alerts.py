@@ -533,12 +533,74 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
     )
 
 
+async def _global_resolve_pass() -> int:
+    """Walk every OPEN row in the DB, fetch the (symbol, interval) candles
+    once per combo, and resolve via annotate + synthetic Signal. This runs
+    on every tick regardless of subscriptions or alert-enabled state, so a
+    trade is never orphaned by the user unsubscribing from its strategy.
+
+    Returns the number of rows newly closed."""
+    rows = trade_store.all_open_trades()
+    if not rows:
+        return 0
+
+    # Bucket by (symbol, interval) so we make at most one fetch_klines call
+    # per market regardless of how many strategies have open trades there.
+    by_combo: dict[tuple[str, str], list[dict]] = {}
+    for r in rows:
+        by_combo.setdefault((r["symbol"], r["interval"]), []).append(r)
+
+    closed = 0
+    for (symbol, interval), group in by_combo.items():
+        try:
+            candles = await fetch_klines(symbol, interval, 500)
+        except Exception as e:
+            log.warning("[RESOLVE] fetch_klines failed for %s/%s: %s", symbol, interval, e)
+            continue
+        for r in group:
+            synth = Signal(
+                time=r["signal_time"], type=r["type"], price=r["entry"],
+                reason=r.get("reason") or "",
+                entry=r["entry"], stop_loss=r["stop_loss"], target=r["target"],
+            )
+            resolved = annotate([synth], candles)[0]
+            if resolved.status not in ("WIN", "LOSS"):
+                continue
+            exit_price = resolved.target if resolved.status == "WIN" else resolved.stop_loss
+            ok = trade_store.close_trade(
+                strategy_id=r["strategy_id"],
+                interval=r["interval"],
+                signal_time=r["signal_time"],
+                status=resolved.status,
+                exit_price=float(exit_price) if exit_price is not None else 0.0,
+                exit_time=int(resolved.closed_at or 0),
+                pnl_pct=float(resolved.pnl_pct or 0.0),
+            )
+            if ok:
+                closed += 1
+                log.info(
+                    "[RESOLVE] %s %s @ %s on %s -> %s pnl=%.2f%%",
+                    r["strategy_id"], r["type"], r["signal_time"], r["symbol"],
+                    resolved.status, resolved.pnl_pct or 0.0,
+                )
+    return closed
+
+
 async def alert_loop():
     """Background task, started from main.py on startup."""
     log.info("alert worker started; polling every %ss", POLL_SECONDS)
     while True:
         try:
             cfg = await load_config()
+
+            # Always run the global resolve pass first. It does not need any
+            # subscription or alert-enabled state -- if there is an OPEN row
+            # in the DB and price has hit its stop or target, close it.
+            try:
+                await _global_resolve_pass()
+            except Exception:
+                log.exception("global resolve pass crashed; continuing")
+
             recipients = _all_chat_ids(cfg)
             if cfg.enabled and cfg.token and recipients and cfg.subscriptions:
                 changed = False

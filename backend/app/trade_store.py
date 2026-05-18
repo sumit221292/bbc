@@ -195,6 +195,17 @@ def close_trade(
         return cur.rowcount > 0
 
 
+def all_open_trades() -> list[dict[str, Any]]:
+    """Every OPEN row across strategies / intervals / symbols. The worker's
+    global resolve pass uses this so an open trade is never abandoned --
+    even after the user unsubscribes from the strategy that fired it."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trades WHERE status = 'OPEN' ORDER BY signal_time ASC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def open_trades(strategy_id: str, interval: str, symbol: str | None = None) -> list[dict[str, Any]]:
     sql = ("SELECT * FROM trades WHERE strategy_id = ? AND interval = ? "
            "AND status = 'OPEN'")
