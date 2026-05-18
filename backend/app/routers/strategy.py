@@ -173,36 +173,38 @@ def _build_snapshot(
     sid: str, name: str, signals: list[Signal], candles, user_interval: str,
     symbol: str,
 ) -> StrategySnapshot:
-    """Live signal + DB stats. The signal half (BUY/SELL/HOLD, entry, SL,
-    target, mark-to-market PnL) must come from fresh candles, because that
-    is what the user trades against right now. Win rate / total trades /
-    cumulative PnL come from trade_store so the numbers reflect what the
-    worker has actually fired -- never from in-memory backtest.
+    """All-tab row. Signal column + stats are BOTH DB-driven so clicking
+    a row and landing on the Live tab never disagrees -- if All says
+    'SELL CHAL RAHA' there is an actual DB-tracked open trade backing it.
+    Backtest signals from the in-memory evaluation are ignored entirely
+    here; they used to leak in as analytical 'maybe' setups that vanished
+    the moment the user navigated to Live.
     """
-    signals = _filter_min_rr(signals)
-    last_close = candles[-1].close
-    open_trades = [s for s in signals if s.status == "OPEN"]
-    if open_trades:
-        latest = open_trades[-1]
-        signal_type = latest.type
-        status = latest.status
-        entry, stop, target = latest.entry, latest.stop_loss, latest.target
-        if entry:
-            if signal_type == "BUY":
-                pnl_live = (last_close - entry) / entry * 100.0
-            else:
-                pnl_live = (entry - last_close) / entry * 100.0
+    db_interval = _db_interval_for(sid, user_interval)
+    db = trade_store.stats(strategy_id=sid, interval=db_interval, symbol=symbol)
+    db_opens = trade_store.open_trades(sid, db_interval, symbol)
+
+    last_close = candles[-1].close if candles else 0.0
+    if db_opens:
+        latest_row = db_opens[-1]  # most recent OPEN
+        signal_type = latest_row["type"]
+        status = "OPEN"
+        entry = latest_row["entry"]
+        stop = latest_row["stop_loss"]
+        target = latest_row["target"]
+        if entry and last_close:
+            pnl_live = ((last_close - entry) / entry * 100.0
+                        if signal_type == "BUY"
+                        else (entry - last_close) / entry * 100.0)
         else:
             pnl_live = None
-        last_time = latest.time
+        last_time = latest_row["signal_time"]
     else:
         signal_type = "HOLD"
         status = None
         entry = stop = target = pnl_live = None
-        last_time = signals[-1].time if signals else None
+        last_time = None
 
-    db_interval = _db_interval_for(sid, user_interval)
-    db = trade_store.stats(strategy_id=sid, interval=db_interval, symbol=symbol)
     return StrategySnapshot(
         id=sid, name=name,
         category=_CATEGORIES.get(sid, "Other"),

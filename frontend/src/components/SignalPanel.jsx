@@ -127,6 +127,10 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
   const storageInterval = strategyMeta?.storage_interval || interval
 
   useEffect(() => {
+    // Clear stale data IMMEDIATELY when any input changes so the user does
+    // not see the previous (strategy, interval, symbol) trades flashing
+    // before the new ones load. This is the "blink" the user reported.
+    setStored({ trades: [], summary: null })
     if (!strategyId || !storageInterval || !symbol) return
     let cancelled = false
     const fetchOnce = async () => {

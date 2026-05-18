@@ -166,6 +166,9 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== 'best') return
     let cancelled = false
+    // Drop stale leaderboard on coin switch so the Best tab does not flash
+    // the previous coin's rows while the new ones load.
+    setLeaderboard(null)
     const fetchOnce = async () => {
       try {
         const lb = await getLeaderboard(symbol)
