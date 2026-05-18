@@ -16,10 +16,17 @@ class Strategy(ABC):
     id: ClassVar[str]
     name: ClassVar[str]
     description: ClassVar[str]
+    # The worker's preferred interval for firing this strategy when the
+    # subscription does not explicitly set one. UI uses this to know which
+    # DB partition (strategy_id, interval) holds the live trades.
+    storage_interval: ClassVar[str] = "1h"
 
     @classmethod
     def meta(cls) -> StrategyMeta:
-        return StrategyMeta(id=cls.id, name=cls.name, description=cls.description)
+        return StrategyMeta(
+            id=cls.id, name=cls.name, description=cls.description,
+            storage_interval=cls.storage_interval,
+        )
 
     @abstractmethod
     def evaluate(self, candles: list[Candle]) -> list[Signal]:

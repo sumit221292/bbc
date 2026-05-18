@@ -81,7 +81,16 @@ def run_smc_mtf(strategy_id: str, ctx: SMCMTFContext, start_idx: int = 0) -> lis
 
 
 def list_mtf_metas() -> list[StrategyMeta]:
-    return [StrategyMeta(id=k, name=v[0], description=v[1]) for k, v in _MTF_REGISTRY.items()]
+    # MTF strategies fire on the 1h trigger (with 4h/1d context). smc_mtf is
+    # special: it runs on 5m candles with 15m/1h context. The storage_interval
+    # field tells the UI which DB partition to read for each.
+    return [
+        StrategyMeta(
+            id=k, name=v[0], description=v[1],
+            storage_interval="5m" if k == "smc_mtf" else "1h",
+        )
+        for k, v in _MTF_REGISTRY.items()
+    ]
 
 
 def is_mtf(strategy_id: str) -> bool:

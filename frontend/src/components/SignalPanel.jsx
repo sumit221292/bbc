@@ -112,19 +112,26 @@ function TradeCard({ trade, livePrice, index }) {
 }
 
 function SignalPanel({ result, livePrice, strategies = [], interval }) {
-  // Live-persisted trades from the SQLite store, scoped to the current
-  // (strategy, interval) pair. Backtest signals from `result.signals` only
-  // power the analytical Live Trade card; the Recent Trades history now
-  // reflects what the always-on worker actually fired and what's resolved.
+  // Live-persisted trades from the SQLite store, scoped to the (strategy,
+  // storage_interval) pair. MTF strategies always fire on 1h, SMC MTF on 5m,
+  // SMC Momentum on 15m -- regardless of the chart interval the user is
+  // viewing. The storage_interval field on strategy meta tells us which
+  // DB partition to read so a 4h chart of an MTF strategy still surfaces
+  // the worker-fired 1h trades.
   const [stored, setStored] = useState({ trades: [], summary: null })
   const strategyId = result?.strategy
+  const strategyMeta = strategies.find(s => s.id === strategyId)
+  const strategyName = strategyMeta?.name || strategyId || ''
+  // Fall back to the chart interval when the meta does not pin a storage TF
+  // (older deployments + brand-new single-TF strategies).
+  const storageInterval = strategyMeta?.storage_interval || interval
 
   useEffect(() => {
-    if (!strategyId || !interval) return
+    if (!strategyId || !storageInterval) return
     let cancelled = false
     const fetchOnce = async () => {
       try {
-        const data = await getTrades({ strategy: strategyId, interval, limit: 50 })
+        const data = await getTrades({ strategy: strategyId, interval: storageInterval, limit: 50 })
         if (!cancelled) setStored(data)
       } catch {
         // swallow — DB may be empty after a fresh deploy
@@ -133,15 +140,13 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
     fetchOnce()
     const t = setInterval(fetchOnce, 30_000)
     return () => { cancelled = true; clearInterval(t) }
-  }, [strategyId, interval])
+  }, [strategyId, storageInterval])
 
   if (!result) return <div className="signal-panel"><div className="muted">Loading…</div></div>
   const { latest, signals, strategy: _sid } = result
   // Always show DB-backed stats (live worker-fired trades). Backtest summary
   // is ignored so numbers stay consistent across Live / All / Best tabs.
   const summary = stored.summary
-  const strategyMeta = strategies.find(s => s.id === strategyId)
-  const strategyName = strategyMeta?.name || strategyId || ''
 
   // Worker-fired open trades from the DB are the source of truth -- a fresh
   // backtest on the last 500 candles can re-resolve old setups differently
@@ -210,7 +215,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
 
       {summary && (
         <div className="summary">
-          <div className="title">📊 Live Performance — {strategyName} · {interval || '—'} (worker-fired only)</div>
+          <div className="title">📊 Live Performance — {strategyName} · {storageInterval || '—'} (worker-fired only)</div>
           <div className="stats">
             <div><div className="k">Total Trades</div><div className="v">{summary.total}</div></div>
             <div><div className="k">Profit Hua</div><div className="v pos">{summary.wins}</div></div>
@@ -225,7 +230,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
 
       <div className="history">
         <div className="title">
-          📜 Recent Trades — {strategyName} · {interval || '—'}
+          📜 Recent Trades — {strategyName} · {storageInterval || '—'}
           {stored.trades.length > 0 && (
             <span className="muted small"> (saved {stored.trades.length})</span>
           )}
@@ -245,7 +250,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
           {stored.trades.length === 0 && (
             <li className="muted">
               Abhi koi live trade save nahi hua — alert worker se naya signal aate hi yaha
-              dikhega ({strategyName} · {interval || '—'}).
+              dikhega ({strategyName} · {storageInterval || '—'}).
             </li>
           )}
         </ul>

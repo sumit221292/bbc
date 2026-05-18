@@ -30,6 +30,7 @@ from .base import Strategy
 class SMCMomentum(Strategy):
     id = "smc_momentum"
     name = "SMC + Momentum (5m / 15m)"
+    storage_interval = "15m"   # worker default; matches alerts._default_interval
     description = (
         "Smart Money Concepts: 400-point impulse + at least one of "
         "(FVG retest / Order Block retest / Liquidity sweep). Trend-filtered "

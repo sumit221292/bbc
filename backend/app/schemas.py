@@ -32,6 +32,11 @@ class StrategyMeta(BaseModel):
     id: str
     name: str
     description: str
+    # Where the alert worker stores fired trades for this strategy. MTF
+    # strategies always fire at 1h, SMC MTF at 5m, single-TF strategies
+    # at whatever interval the user subscribed to. The UI uses this to
+    # look up the correct DB partition regardless of the chart timeframe.
+    storage_interval: Optional[str] = None
 
 
 class StrategySummary(BaseModel):
