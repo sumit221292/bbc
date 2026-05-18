@@ -3,14 +3,12 @@ import { getAlertsConfig, sendBackendTest, setAlertsConfig } from '../api.js'
 import SymbolPicker from './SymbolPicker.jsx'
 import { getTelegramUpdates } from '../lib/telegram.js'
 import AutoTradePanel from './AutoTradePanel.jsx'
+import { timeAgo as timeAgoBase } from '../lib/format.js'
 
+// Local wrapper -- the shared helper returns '' for falsy ts, but the
+// debug panel expects the literal "never" string.
 function timeAgo(ts) {
-  if (!ts) return 'never'
-  const diff = Math.floor(Date.now() / 1000 - ts)
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
+  return ts ? timeAgoBase(ts) : 'never'
 }
 
 /** UI for setting up the always-on backend Telegram worker.

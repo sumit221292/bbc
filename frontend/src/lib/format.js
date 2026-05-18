@@ -48,3 +48,34 @@ export function fmtPct(n, d = 2) {
   const sign = n >= 0 ? '+' : ''
   return `${sign}${n.toFixed(d)}%`
 }
+
+// Relative time -- "2d 23h ago" is much more honest than "2d ago" when the
+// trade is actually 71 hours old. Granularity grows with the gap.
+export function timeAgo(ts) {
+  if (!ts) return ''
+  const diff = Math.floor(Date.now() / 1000 - ts)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) {
+    const hrs = Math.floor(diff / 3600)
+    const mins = Math.floor((diff % 3600) / 60)
+    return mins > 0 ? `${hrs}h ${mins}m ago` : `${hrs}h ago`
+  }
+  const days = Math.floor(diff / 86400)
+  const hrs = Math.floor((diff % 86400) / 3600)
+  return hrs > 0 ? `${days}d ${hrs}h ago` : `${days}d ago`
+}
+
+// Absolute time in IST. Browser `toLocaleString()` falls back to the
+// system locale which is often US ("5/15/2026, 7:30 PM"). The Indian
+// reader expects "15 May 2026, 7:30 PM IST" -- explicit timezone +
+// day-month-year ordering. Pinning to Asia/Kolkata also makes the
+// label stable for users abroad.
+export function fmtIST(ts) {
+  if (!ts) return ''
+  return new Date(ts * 1000).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  }) + ' IST'
+}

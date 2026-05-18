@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from 'react'
 import { getTrades } from '../api.js'
-import { fmtPrice as fmt, fmtPct as pct } from '../lib/format.js'
+import { fmtPrice as fmt, fmtPct as pct, timeAgo, fmtIST } from '../lib/format.js'
 
 function StatusBadge({ status }) {
   if (!status) return null
@@ -24,15 +24,6 @@ function tradeOutcomes(t) {
   const lossPct = (sign * (t.stop_loss - t.entry) / t.entry) * 100
   const rr = Math.abs(profitPct / lossPct)
   return { profitPct, lossPct, rr }
-}
-
-function timeAgo(ts) {
-  if (!ts) return ''
-  const diff = Math.floor(Date.now() / 1000 - ts)
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
 }
 
 /** A single trade card. Used both for HOLD (the only-active-card case) and
@@ -65,7 +56,9 @@ function TradeCard({ trade, livePrice, index }) {
         )}
       </div>
       {trade.status === 'OPEN' && trade.time && (
-        <div className="muted small">Trade opened {timeAgo(trade.time)}</div>
+        <div className="muted small">
+          Trade opened {timeAgo(trade.time)} · {fmtIST(trade.time)}
+        </div>
       )}
       <div className="reason">{trade.reason}</div>
 
@@ -256,7 +249,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
               {t.pnl_pct != null && t.status !== 'OPEN' && (
                 <span className={`pnl sm ${t.pnl_pct >= 0 ? 'pos' : 'neg'}`}>{pct(t.pnl_pct)}</span>
               )}
-              <span className="muted small">{new Date(t.signal_time * 1000).toLocaleString()}</span>
+              <span className="muted small">{fmtIST(t.signal_time)}</span>
             </li>
           ))}
           {stored.trades.length === 0 && (
