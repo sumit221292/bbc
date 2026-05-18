@@ -43,8 +43,24 @@ app.include_router(trades_router.router)
 
 @app.on_event("startup")
 async def _start_alert_worker():
-    """Always-on Telegram notification worker."""
+    """Always-on Telegram notification worker.
+
+    Also dumps the trade-history row count + DB path on boot so any
+    surprise reset (volume not mounted, file deleted, etc.) is visible
+    in Railway logs the moment it happens, instead of being noticed
+    days later when the user opens the dashboard."""
     trade_store.init_db()
+    try:
+        existing = trade_store.list_trades(limit=1)
+        stats = trade_store.stats()
+        log.info(
+            "[BOOT] trade_store ready at %s -- %d total rows (%d closed, %d open). "
+            "Most-recent signal_time=%s",
+            trade_store.DB_PATH, stats["total"], stats["closed"], stats["open"],
+            existing[0]["signal_time"] if existing else "none",
+        )
+    except Exception:
+        log.exception("[BOOT] trade_store sanity dump failed")
     app.state.alert_task = asyncio.create_task(alert_loop())
 
 

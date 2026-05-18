@@ -107,10 +107,9 @@ export async function getTrades({ strategy, interval, symbol, limit = 200 } = {}
   return r.json()
 }
 
-export async function clearTrades() {
-  const r = await fetch(`${BASE}/api/trades`, { method: 'DELETE' })
-  return r.json().catch(() => ({ ok: false }))
-}
+// clearTrades() removed -- the backend DELETE /api/trades endpoint was
+// also removed so trade history cannot be wiped over HTTP. Use the
+// Railway volume directly if a manual reset is ever required.
 
 export async function searchSymbols({ q = '', limit = 20 } = {}) {
   const params = new URLSearchParams()

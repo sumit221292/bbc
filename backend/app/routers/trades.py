@@ -30,8 +30,9 @@ async def all_stats():
     return {"groups": trade_store.per_strategy_stats()}
 
 
-@router.delete("")
-async def clear_trades():
-    """Wipe the history. Useful after schema changes or for the user's reset."""
-    n = trade_store.clear_all()
-    return {"ok": True, "removed": n}
+# NOTE: a DELETE /api/trades endpoint used to live here but was removed
+# at the user's request -- the worker spends days building up trade
+# history and a single accidental curl could wipe everything. The
+# clear_all() function still exists in trade_store for tests + manual
+# database surgery, but it is no longer reachable over HTTP. If a true
+# reset is ever needed, edit the volume directly on Railway.
