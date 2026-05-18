@@ -143,10 +143,26 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
   const strategyMeta = strategies.find(s => s.id === strategyId)
   const strategyName = strategyMeta?.name || strategyId || ''
 
-  // Find ALL currently-open trades. There can be more than one when several
-  // signals fire while no prior trade has resolved yet (the simulator takes
-  // them one at a time, but the analytical view shows every unresolved setup).
-  const openTrades = signals.filter(s => s.status === 'OPEN')
+  // Worker-fired open trades from the DB are the source of truth -- a fresh
+  // backtest on the last 500 candles can re-resolve old setups differently
+  // than what the worker actually fired live. If the DB has any OPEN row for
+  // this (strategy, interval), show those. Fall back to the backtest's open
+  // signals only when the DB has nothing (e.g. brand-new subscription).
+  const dbOpenTrades = (stored.trades || [])
+    .filter(t => t.status === 'OPEN')
+    .map(t => ({
+      time: t.signal_time,
+      type: t.type,
+      entry: t.entry,
+      stop_loss: t.stop_loss,
+      target: t.target,
+      status: 'OPEN',
+      pnl_pct: null,        // live mark-to-market computed below from livePrice
+      reason: t.reason || '',
+      price: t.entry,
+    }))
+  const backtestOpen = signals.filter(s => s.status === 'OPEN')
+  const openTrades = dbOpenTrades.length > 0 ? dbOpenTrades : backtestOpen
 
   // Aggregate live mark-to-market PnL across all open trades.
   let combinedLivePnl = null
