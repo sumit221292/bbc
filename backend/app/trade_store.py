@@ -74,7 +74,7 @@ def init_db() -> None:
                 pnl_pct     REAL,
                 reason      TEXT,
                 created_at  INTEGER NOT NULL,
-                UNIQUE(strategy_id, interval, signal_time)
+                UNIQUE(strategy_id, interval, symbol, signal_time)
             )
             """
         )
@@ -82,6 +82,58 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_trades_strat_interval "
             "ON trades(strategy_id, interval, signal_time DESC)"
         )
+        # Schema migration: the original UNIQUE constraint was
+        # (strategy_id, interval, signal_time) -- symbol was missing.
+        # On 1h bars the close time is identical across coins, so the
+        # second-arriving INSERT for the same strategy + interval +
+        # signal_time hit a UNIQUE violation and was silently dropped
+        # (INSERT OR IGNORE). Result: only the first coin's signal was
+        # ever persisted at any given bar close. We detect the old
+        # constraint via PRAGMA index_list and, if found, rebuild the
+        # table with the correct constraint. Done on every boot so the
+        # migration runs once and then becomes a no-op.
+        idx_rows = conn.execute("PRAGMA index_list('trades')").fetchall()
+        needs_migration = False
+        for ix in idx_rows:
+            if ix["unique"]:
+                cols = [r["name"] for r in
+                        conn.execute(f"PRAGMA index_info('{ix['name']}')").fetchall()]
+                # Old (broken) constraint: 3 cols, no 'symbol'.
+                if "symbol" not in cols and len(cols) == 3:
+                    needs_migration = True
+                    break
+        if needs_migration:
+            import logging as _log
+            _log.getLogger("btc").info(
+                "[trade_store] Migrating trades table: adding symbol to UNIQUE constraint"
+            )
+            conn.executescript("""
+                BEGIN;
+                CREATE TABLE trades_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id TEXT NOT NULL,
+                    interval    TEXT NOT NULL,
+                    symbol      TEXT NOT NULL,
+                    signal_time INTEGER NOT NULL,
+                    type        TEXT NOT NULL,
+                    entry       REAL NOT NULL,
+                    stop_loss   REAL NOT NULL,
+                    target      REAL NOT NULL,
+                    status      TEXT NOT NULL DEFAULT 'OPEN',
+                    exit_price  REAL,
+                    exit_time   INTEGER,
+                    pnl_pct     REAL,
+                    reason      TEXT,
+                    created_at  INTEGER NOT NULL,
+                    UNIQUE(strategy_id, interval, symbol, signal_time)
+                );
+                INSERT INTO trades_new SELECT * FROM trades;
+                DROP TABLE trades;
+                ALTER TABLE trades_new RENAME TO trades;
+                CREATE INDEX IF NOT EXISTS idx_trades_strat_interval
+                    ON trades(strategy_id, interval, signal_time DESC);
+                COMMIT;
+            """)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS kv_store (
