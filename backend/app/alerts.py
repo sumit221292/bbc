@@ -110,16 +110,31 @@ class AlertConfig(BaseModel):
     # New multi-chat field — every notification is broadcast to every id here.
     chat_ids: list[str] = Field(default_factory=list)
     enabled: bool = False
+    # Auto-trade target symbol. Always single because the auto-trader holds
+    # one position at a time on one account. Signal generation can run on
+    # many coins (see `symbols`), but Binance orders only fire here.
     symbol: str = DEFAULT_SYMBOL
+    # Multi-coin watchlist. The worker fires signals + Telegram alerts +
+    # DB inserts for every (symbol, subscription) pair every tick. Defaults
+    # to [symbol] for backward compat with old single-coin configs.
+    symbols: list[str] = Field(default_factory=lambda: [DEFAULT_SYMBOL])
     subscriptions: list[Subscription] = Field(default_factory=list)
-    # last seen signal time per strategy_id (epoch seconds)
+    # last seen signal time, keyed by "symbol::strategy_id" composite so
+    # different coins do not stomp each other's notification cursor.
     last_seen: dict[str, int] = Field(default_factory=dict)
-    # Per-strategy: the most recently NOTIFIED signal whose outcome (WIN/LOSS)
-    # we still need to send a follow-up Telegram for.
+    # Per (symbol, strategy): the most recently NOTIFIED signal whose
+    # outcome (WIN/LOSS) we still need to send a follow-up Telegram for.
     pending_close: dict[str, PendingSignal] = Field(default_factory=dict)
     last_poll: int = 0
     last_error: str = ""
     auto_trade: AutoTradeConfig = Field(default_factory=AutoTradeConfig)
+
+
+def _state_key(symbol: str, strategy_id: str) -> str:
+    """Composite key for per-(symbol, strategy) tracking dicts. Using `::`
+    as the separator because Binance symbols and strategy ids never
+    contain it, so the split is unambiguous."""
+    return f"{symbol}::{strategy_id}"
 
 
 def _default_interval(strategy_id: str) -> str:
@@ -143,6 +158,26 @@ def _strategy_name(strategy_id: str) -> str:
         return strategy_id
 
 
+def _migrate_legacy(cfg: AlertConfig) -> AlertConfig:
+    """One-shot upgrade for configs saved before multi-coin support:
+      - If `symbols` is empty/missing, seed it from `symbol`.
+      - Convert flat last_seen/pending_close keys ("champion") to the new
+        composite form ("BTCUSDT::champion"). Old keys are dropped after
+        translation; nothing else needs to do this lookup."""
+    if not cfg.symbols:
+        cfg.symbols = [cfg.symbol or DEFAULT_SYMBOL]
+
+    if cfg.last_seen and not any("::" in k for k in cfg.last_seen):
+        cfg.last_seen = {
+            _state_key(cfg.symbol, sid): ts for sid, ts in cfg.last_seen.items()
+        }
+    if cfg.pending_close and not any("::" in k for k in cfg.pending_close):
+        cfg.pending_close = {
+            _state_key(cfg.symbol, sid): ps for sid, ps in cfg.pending_close.items()
+        }
+    return cfg
+
+
 async def load_config() -> AlertConfig:
     """Read the alert config from kv_store. Falls back to the legacy JSON
     file once (and writes it into the DB) so users who upgrade don't lose
@@ -151,7 +186,7 @@ async def load_config() -> AlertConfig:
         blob = trade_store.get_kv(CONFIG_KEY)
         if blob is not None:
             try:
-                return AlertConfig(**blob)
+                return _migrate_legacy(AlertConfig(**blob))
             except Exception:
                 log.exception("alerts config (DB) corrupt; resetting")
                 return AlertConfig()
@@ -160,7 +195,7 @@ async def load_config() -> AlertConfig:
         if LEGACY_CONFIG_PATH.exists():
             try:
                 data = json.loads(LEGACY_CONFIG_PATH.read_text(encoding="utf-8"))
-                cfg = AlertConfig(**data)
+                cfg = _migrate_legacy(AlertConfig(**data))
                 trade_store.set_kv(CONFIG_KEY, cfg.model_dump(mode="json"))
                 log.info("alerts config migrated from JSON file to DB kv_store")
                 return cfg
@@ -602,132 +637,123 @@ async def alert_loop():
                 log.exception("global resolve pass crashed; continuing")
 
             recipients = _all_chat_ids(cfg)
+            watch_symbols = cfg.symbols or [cfg.symbol or DEFAULT_SYMBOL]
             if cfg.enabled and cfg.token and recipients and cfg.subscriptions:
                 changed = False
-                for sub in cfg.subscriptions:
-                    try:
-                        latest, all_signals, name, interval, entry_candles = await _evaluate_subscription(sub, cfg.symbol)
-                    except Exception as e:
-                        log.warning("eval %s failed: %s", sub.strategy_id, e)
-                        continue
+                # Nested loop: every (symbol, subscription) gets evaluated.
+                # Order is symbol-outer so all Telegram alerts for one coin
+                # cluster together in chat -- easier for the reader.
+                for symbol in watch_symbols:
+                    for sub in cfg.subscriptions:
+                        key = _state_key(symbol, sub.strategy_id)
+                        try:
+                            latest, all_signals, name, interval, entry_candles = \
+                                await _evaluate_subscription(sub, symbol)
+                        except Exception as e:
+                            log.warning("eval %s/%s failed: %s", symbol, sub.strategy_id, e)
+                            continue
 
-                    # Persist closures for any DB-tracked open trade on this
-                    # (strategy, interval, symbol) that has since resolved.
-                    # We rebuild a synthetic Signal from the DB row and walk
-                    # it through annotate against the entry-TF candles --
-                    # this is independent of whether the strategy still
-                    # re-emits at the same bar (rolling indicators can shift
-                    # and stop emitting the signal even though the trade is
-                    # still alive in the DB).
-                    try:
-                        for row in trade_store.open_trades(sub.strategy_id, interval, cfg.symbol):
-                            synth = Signal(
-                                time=row["signal_time"],
-                                type=row["type"],
-                                price=row["entry"],
-                                reason=row.get("reason") or "",
-                                entry=row["entry"],
-                                stop_loss=row["stop_loss"],
-                                target=row["target"],
-                            )
-                            resolved = annotate([synth], entry_candles)[0]
-                            if resolved.status not in ("WIN", "LOSS"):
-                                continue
-                            exit_price = (
-                                resolved.target if resolved.status == "WIN"
-                                else resolved.stop_loss
-                            )
-                            trade_store.close_trade(
-                                strategy_id=sub.strategy_id,
-                                interval=interval,
-                                signal_time=row["signal_time"],
-                                status=resolved.status,
-                                exit_price=float(exit_price) if exit_price is not None else 0.0,
-                                exit_time=int(resolved.closed_at or 0),
-                                pnl_pct=float(resolved.pnl_pct or 0.0),
-                            )
-                            changed = True
-                            log.info(
-                                "[CLOSED] %s %s @ %s -> %s pnl=%.2f%%",
-                                sub.strategy_id, row["type"], row["signal_time"],
-                                resolved.status, resolved.pnl_pct or 0.0,
-                            )
-                    except Exception:
-                        log.exception("trade_store close pass failed for %s", sub.strategy_id)
-
-                    # 1. Closure check — was a previously-notified trade resolved?
-                    pending = cfg.pending_close.get(sub.strategy_id)
-                    if pending is not None:
-                        matching = next((s for s in all_signals if s.time == pending.time), None)
-                        if matching is not None and matching.status in ("WIN", "LOSS"):
-                            close_msg = _format_closure(cfg.symbol, name, pending, matching)
-                            ok_c, _ = await broadcast_telegram(cfg.token, recipients, close_msg)
-                            if ok_c:
-                                cfg.pending_close.pop(sub.strategy_id, None)
-                                changed = True
-                                log.info("[CLOSURE] sent %s for %s @ %s",
-                                         matching.status, sub.strategy_id, matching.time)
-
-                    if latest is None:
-                        continue
-                    last_seen = cfg.last_seen.get(sub.strategy_id, 0)
-                    if latest.time > last_seen:
-                        # Loud audit log for every signal — captures any future
-                        # direction-mismatch evidence in raw form.
-                        log.info(
-                            "[ALERT] %s type=%s entry=%s stop=%s target=%s reason=%r",
-                            sub.strategy_id, latest.type, latest.entry,
-                            latest.stop_loss, latest.target, latest.reason,
-                        )
-                        eff_type, corrected = _verify_direction(latest)
-                        if corrected:
-                            log.error(
-                                "[DIRECTION-MISMATCH] %s declared %s but geometry "
-                                "indicates %s (entry=%s stop=%s target=%s)",
-                                sub.strategy_id, latest.type, eff_type,
-                                latest.entry, latest.stop_loss, latest.target,
-                            )
-
-                        # Try auto-execution BEFORE the Telegram message so
-                        # the message can reflect the outcome.
-                        trade_status = await _maybe_auto_execute(cfg, sub, latest)
-                        msg = _format_signal(cfg.symbol, name, latest)
-                        if trade_status:
-                            msg = msg + "\n\n" + trade_status
-                        ok, err = await broadcast_telegram(cfg.token, recipients, msg)
-                        if ok:
-                            cfg.last_seen[sub.strategy_id] = latest.time
-                            # Stash for follow-up closure alert.
-                            if (latest.entry is not None and latest.stop_loss is not None
-                                    and latest.target is not None):
-                                cfg.pending_close[sub.strategy_id] = PendingSignal(
-                                    time=latest.time, side=latest.type,
-                                    entry=latest.entry, stop=latest.stop_loss,
-                                    target=latest.target,
+                        # Per-(symbol, strategy) close pass on this tick's candles.
+                        # The global resolve already covered the orphan case --
+                        # this one stays so the latest fetched candles can resolve
+                        # right after a new signal lands.
+                        try:
+                            for row in trade_store.open_trades(sub.strategy_id, interval, symbol):
+                                synth = Signal(
+                                    time=row["signal_time"], type=row["type"],
+                                    price=row["entry"], reason=row.get("reason") or "",
+                                    entry=row["entry"], stop_loss=row["stop_loss"],
+                                    target=row["target"],
                                 )
-                                # Persist the trade — INSERT OR IGNORE keeps
-                                # this idempotent if the loop re-broadcasts.
-                                try:
-                                    trade_store.insert_trade(
-                                        strategy_id=sub.strategy_id,
-                                        interval=interval,
-                                        symbol=cfg.symbol,
-                                        signal_time=latest.time,
-                                        type_=latest.type,
-                                        entry=float(latest.entry),
-                                        stop_loss=float(latest.stop_loss),
-                                        target=float(latest.target),
-                                        reason=str(latest.reason or ""),
-                                        created_at=int(time.time()),
+                                resolved = annotate([synth], entry_candles)[0]
+                                if resolved.status not in ("WIN", "LOSS"):
+                                    continue
+                                exit_price = (
+                                    resolved.target if resolved.status == "WIN"
+                                    else resolved.stop_loss
+                                )
+                                trade_store.close_trade(
+                                    strategy_id=sub.strategy_id, interval=interval,
+                                    signal_time=row["signal_time"],
+                                    status=resolved.status,
+                                    exit_price=float(exit_price) if exit_price is not None else 0.0,
+                                    exit_time=int(resolved.closed_at or 0),
+                                    pnl_pct=float(resolved.pnl_pct or 0.0),
+                                )
+                                changed = True
+                                log.info("[CLOSED] %s/%s %s @ %s -> %s pnl=%.2f%%",
+                                         symbol, sub.strategy_id, row["type"], row["signal_time"],
+                                         resolved.status, resolved.pnl_pct or 0.0)
+                        except Exception:
+                            log.exception("close pass failed for %s/%s", symbol, sub.strategy_id)
+
+                        # Pending closure Telegram (per symbol).
+                        pending = cfg.pending_close.get(key)
+                        if pending is not None:
+                            matching = next((s for s in all_signals if s.time == pending.time), None)
+                            if matching is not None and matching.status in ("WIN", "LOSS"):
+                                close_msg = _format_closure(symbol, name, pending, matching)
+                                ok_c, _ = await broadcast_telegram(cfg.token, recipients, close_msg)
+                                if ok_c:
+                                    cfg.pending_close.pop(key, None)
+                                    changed = True
+                                    log.info("[CLOSURE] sent %s for %s/%s @ %s",
+                                             matching.status, symbol, sub.strategy_id, matching.time)
+
+                        if latest is None:
+                            continue
+                        last_seen = cfg.last_seen.get(key, 0)
+                        if latest.time > last_seen:
+                            log.info(
+                                "[ALERT] %s/%s type=%s entry=%s stop=%s target=%s reason=%r",
+                                symbol, sub.strategy_id, latest.type, latest.entry,
+                                latest.stop_loss, latest.target, latest.reason,
+                            )
+                            eff_type, corrected = _verify_direction(latest)
+                            if corrected:
+                                log.error(
+                                    "[DIRECTION-MISMATCH] %s/%s declared %s but geometry %s",
+                                    symbol, sub.strategy_id, latest.type, eff_type,
+                                )
+
+                            # Auto-trade only fires on the dedicated auto-trade
+                            # symbol; the rest are Telegram + DB only.
+                            trade_status = None
+                            if symbol == cfg.symbol:
+                                trade_status = await _maybe_auto_execute(cfg, sub, latest)
+                            msg = _format_signal(symbol, name, latest)
+                            if trade_status:
+                                msg = msg + "\n\n" + trade_status
+                            ok, err = await broadcast_telegram(cfg.token, recipients, msg)
+                            if ok:
+                                cfg.last_seen[key] = latest.time
+                                if (latest.entry is not None and latest.stop_loss is not None
+                                        and latest.target is not None):
+                                    cfg.pending_close[key] = PendingSignal(
+                                        time=latest.time, side=latest.type,
+                                        entry=latest.entry, stop=latest.stop_loss,
+                                        target=latest.target,
                                     )
-                                except Exception:
-                                    log.exception("trade_store insert failed for %s", sub.strategy_id)
-                            changed = True
-                            log.info("sent alert for %s @ %s", sub.strategy_id, latest.time)
-                        else:
-                            cfg.last_error = f"{sub.strategy_id}: {err}"
-                            changed = True
-                            log.warning("send failed: %s", err)
+                                    try:
+                                        trade_store.insert_trade(
+                                            strategy_id=sub.strategy_id,
+                                            interval=interval, symbol=symbol,
+                                            signal_time=latest.time, type_=latest.type,
+                                            entry=float(latest.entry),
+                                            stop_loss=float(latest.stop_loss),
+                                            target=float(latest.target),
+                                            reason=str(latest.reason or ""),
+                                            created_at=int(time.time()),
+                                        )
+                                    except Exception:
+                                        log.exception("insert failed for %s/%s", symbol, sub.strategy_id)
+                                changed = True
+                                log.info("sent alert for %s/%s @ %s",
+                                         symbol, sub.strategy_id, latest.time)
+                            else:
+                                cfg.last_error = f"{symbol}/{sub.strategy_id}: {err}"
+                                changed = True
+                                log.warning("send failed: %s", err)
                 cfg.last_poll = int(time.time())
                 if changed or cfg.last_poll - getattr(cfg, "last_poll", 0) > 60:
                     await save_config(cfg)

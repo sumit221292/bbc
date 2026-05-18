@@ -27,6 +27,9 @@ function AlertsTab({ strategies, snapshot }) {
   const [saving, setSaving] = useState(false)
   const [detectedChats, setDetectedChats] = useState([])
   const [detectStatus, setDetectStatus] = useState('')
+  // Multi-coin watchlist. The worker fires signals for every (symbol,
+  // strategy) pair every tick. Auto-trade still uses serverState.symbol.
+  const [watchSymbols, setWatchSymbols] = useState(['BTCUSDT'])
 
   // Pull current config on mount
   useEffect(() => {
@@ -39,6 +42,7 @@ function AlertsTab({ strategies, snapshot }) {
       setChatIdsText(all.join(', '))
       setEnabled(s.enabled)
       setSubs(s.subscriptions || [])
+      setWatchSymbols(s.symbols && s.symbols.length > 0 ? s.symbols : [s.symbol || 'BTCUSDT'])
     }).catch(() => { /* offline ok */ })
     const id = setInterval(() => {
       getAlertsConfig().then(setServerState).catch(() => {})
@@ -73,6 +77,8 @@ function AlertsTab({ strategies, snapshot }) {
         chat_id: '',                  // we use the new list field now
         chat_ids: chatIds,
         enabled,
+        symbol: serverState?.symbol || 'BTCUSDT',  // auto-trade target
+        symbols: watchSymbols,                      // multi-coin watchlist
         subscriptions: subs,
       }
       const updated = await setAlertsConfig(cleaned)
@@ -277,6 +283,53 @@ function AlertsTab({ strategies, snapshot }) {
       </div>
 
       <div className="alerts-subs">
+        <div className="alerts-subs-head">
+          <span className="title">Watch Coins</span>
+          <span className="muted">{watchSymbols.length} selected</span>
+        </div>
+        <div className="alerts-subs-list" style={{ marginBottom: 12 }}>
+          {[
+            ['BTCUSDT', 'BTC/USDT'],
+            ['ETHUSDT', 'ETH/USDT'],
+            ['SOLUSDT', 'SOL/USDT'],
+            ['BNBUSDT', 'BNB/USDT'],
+            ['XRPUSDT', 'XRP/USDT'],
+            ['DOGEUSDT', 'DOGE/USDT'],
+            ['ADAUSDT', 'ADA/USDT'],
+            ['PAXGUSDT', 'PAXG/USDT (Gold)'],
+          ].map(([sym, label]) => {
+            const on = watchSymbols.includes(sym)
+            return (
+              <label key={sym} className={`alerts-sub-row ${on ? 'on' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => {
+                    if (on) {
+                      // Don't let the user drop the auto-trade symbol from
+                      // the watchlist -- worker depends on it.
+                      if (sym === serverState?.symbol) return
+                      setWatchSymbols(watchSymbols.filter(s => s !== sym))
+                    } else {
+                      setWatchSymbols([...watchSymbols, sym])
+                    }
+                  }}
+                />
+                <span className="alerts-sub-name">
+                  {label}
+                  {sym === serverState?.symbol && (
+                    <span className="muted small"> · auto-trade target</span>
+                  )}
+                </span>
+              </label>
+            )
+          })}
+        </div>
+        <div className="muted small" style={{ marginBottom: 16, lineHeight: 1.4 }}>
+          Worker har coin pe har subscribed strategy fire karega. Signals + Telegram + DB.
+          Auto-trade sirf <b>{serverState?.symbol || 'BTCUSDT'}</b> pe chalega (single position).
+        </div>
+
         <div className="alerts-subs-head">
           <span className="title">Subscribed Strategies</span>
           <span className="muted">{subs.length} / {strategies.length}</span>

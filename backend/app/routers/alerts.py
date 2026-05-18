@@ -18,7 +18,8 @@ class ConfigUpdate(BaseModel):
     chat_id: str = ""                     # legacy single chat
     chat_ids: list[str] = []              # new: multiple recipients
     enabled: bool = True
-    symbol: str = "BTCUSDT"
+    symbol: str = "BTCUSDT"               # auto-trade target (single)
+    symbols: list[str] = []               # multi-coin watchlist for signals
     subscriptions: list[Subscription] = []
 
 
@@ -53,7 +54,8 @@ class ConfigResponse(BaseModel):
     chat_id: str                      # legacy single
     chat_ids: list[str]               # new multi
     enabled: bool
-    symbol: str
+    symbol: str                       # auto-trade target
+    symbols: list[str]                # multi-coin watchlist
     subscriptions: list[Subscription]
     last_seen: dict[str, int]
     last_poll: int
@@ -88,6 +90,7 @@ def _to_response(cfg: AlertConfig) -> ConfigResponse:
         chat_ids=cfg.chat_ids,
         enabled=cfg.enabled,
         symbol=cfg.symbol,
+        symbols=cfg.symbols or [cfg.symbol],
         subscriptions=cfg.subscriptions,
         last_seen=cfg.last_seen,
         last_poll=cfg.last_poll,
@@ -119,28 +122,41 @@ async def update_alerts_config(payload: ConfigUpdate):
             seen.add(c)
             cleaned.append(c)
     cfg.chat_ids = cleaned
-    cfg.symbol = payload.symbol or "BTCUSDT"
-    # Auto-enable when the config is fully populated. Without this, on a
-    # fresh Railway deploy the alerts_config.json is reset (enabled=false)
-    # and the frontend's first GET propagates that 'false' back into the
-    # form -- the user clicks Save thinking they're enabling, but they're
-    # silently saving a paused worker. Now: if the user has token + at least
-    # one chat + at least one subscription, we force enabled=True. To pause,
-    # clear subscriptions.
+    cfg.symbol = (payload.symbol or "BTCUSDT").upper()
+    # Clean + upper-case + dedupe the multi-coin watchlist. Always include
+    # the auto-trade symbol so the worker fires there even if the user
+    # forgot to tick it.
+    sym_list: list[str] = []
+    sym_seen: set[str] = set()
+    for s in [*payload.symbols, cfg.symbol]:
+        u = (s or "").strip().upper()
+        if u and u not in sym_seen:
+            sym_seen.add(u)
+            sym_list.append(u)
+    cfg.symbols = sym_list or [cfg.symbol]
+
     has_chat = bool(payload.chat_id or cleaned)
     has_full = bool(cfg.token and has_chat and payload.subscriptions)
     cfg.enabled = payload.enabled if not has_full else True
 
+    # last_seen keys are now "symbol::strategy_id" composites. Sync to the
+    # cross product of (active symbols x active subscriptions). For brand-new
+    # combos stamp "now" so the worker doesn't backfire an old signal.
     now = int(time.time())
-    new_ids = {s.strategy_id for s in payload.subscriptions}
-    old_ids = {s.strategy_id for s in cfg.subscriptions}
-    # New subscriptions: mark "now" as last_seen so we don't backfill.
-    for sid in new_ids - old_ids:
-        cfg.last_seen[sid] = now
-    # Removed subscriptions: drop their last_seen.
-    for sid in list(cfg.last_seen):
-        if sid not in new_ids:
-            cfg.last_seen.pop(sid, None)
+    new_combos = {
+        f"{sym}::{s.strategy_id}"
+        for sym in cfg.symbols
+        for s in payload.subscriptions
+    }
+    old_keys = set(cfg.last_seen)
+    for k in new_combos - old_keys:
+        cfg.last_seen[k] = now
+    for k in list(cfg.last_seen):
+        if k not in new_combos:
+            cfg.last_seen.pop(k, None)
+    for k in list(cfg.pending_close):
+        if k not in new_combos:
+            cfg.pending_close.pop(k, None)
 
     cfg.subscriptions = payload.subscriptions
     cfg.last_error = ""
