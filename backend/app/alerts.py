@@ -742,6 +742,43 @@ async def alert_loop():
                                     symbol, sub.strategy_id, latest.type, eff_type,
                                 )
 
+                            # DB-first: persist the trade BEFORE Telegram fires.
+                            # If insert fails (or the row already exists, which
+                            # we treat as "already alerted earlier"), skip the
+                            # Telegram so the chat never disagrees with what
+                            # the Live tab can show. This is the fix for the
+                            # "Telegram message came but trade not in app"
+                            # complaint.
+                            has_levels = (latest.entry is not None
+                                          and latest.stop_loss is not None
+                                          and latest.target is not None)
+                            if has_levels:
+                                try:
+                                    inserted = trade_store.insert_trade(
+                                        strategy_id=sub.strategy_id,
+                                        interval=interval, symbol=symbol,
+                                        signal_time=latest.time, type_=latest.type,
+                                        entry=float(latest.entry),
+                                        stop_loss=float(latest.stop_loss),
+                                        target=float(latest.target),
+                                        reason=str(latest.reason or ""),
+                                        created_at=int(time.time()),
+                                    )
+                                except Exception:
+                                    log.exception("insert failed for %s/%s -- aborting alert",
+                                                  symbol, sub.strategy_id)
+                                    continue  # don't fire Telegram or touch last_seen
+                                if not inserted:
+                                    # Row already existed (duplicate signal_time):
+                                    # someone else (probably an earlier tick) already
+                                    # alerted on this. Mark last_seen so we stop
+                                    # re-checking, but don't re-send the message.
+                                    log.info("[DEDUPE] %s/%s @ %s already in DB -- skipping alert",
+                                             symbol, sub.strategy_id, latest.time)
+                                    cfg.last_seen[key] = latest.time
+                                    changed = True
+                                    continue
+
                             # Auto-trade only fires on the dedicated auto-trade
                             # symbol; the rest are Telegram + DB only.
                             trade_status = None
@@ -753,26 +790,12 @@ async def alert_loop():
                             ok, err = await broadcast_telegram(cfg.token, recipients, msg)
                             if ok:
                                 cfg.last_seen[key] = latest.time
-                                if (latest.entry is not None and latest.stop_loss is not None
-                                        and latest.target is not None):
+                                if has_levels:
                                     cfg.pending_close[key] = PendingSignal(
                                         time=latest.time, side=latest.type,
                                         entry=latest.entry, stop=latest.stop_loss,
                                         target=latest.target,
                                     )
-                                    try:
-                                        trade_store.insert_trade(
-                                            strategy_id=sub.strategy_id,
-                                            interval=interval, symbol=symbol,
-                                            signal_time=latest.time, type_=latest.type,
-                                            entry=float(latest.entry),
-                                            stop_loss=float(latest.stop_loss),
-                                            target=float(latest.target),
-                                            reason=str(latest.reason or ""),
-                                            created_at=int(time.time()),
-                                        )
-                                    except Exception:
-                                        log.exception("insert failed for %s/%s", symbol, sub.strategy_id)
                                 changed = True
                                 log.info("sent alert for %s/%s @ %s",
                                          symbol, sub.strategy_id, latest.time)
