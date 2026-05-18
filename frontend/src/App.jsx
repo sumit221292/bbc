@@ -100,6 +100,13 @@ export default function App() {
   // Strategy run — refetch on strategy/symbol/interval change AND every 30s.
   useEffect(() => {
     if (!strategyId) return
+    // Drop the previous strategy's result + markers immediately so the
+    // Live tab does not flash the old strategy's banner / cards / chart
+    // overlays while the new fetch is in flight. This is the flicker
+    // the user reported when clicking from All -> Live.
+    setStrategyResult(null)
+    chartRef.current?.setMarkers([])
+    chartRef.current?.setLevels({})
     let cancelled = false
     const fetchOnce = async () => {
       try {
