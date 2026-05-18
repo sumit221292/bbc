@@ -175,7 +175,12 @@ function StrategyRow({ row, selected, onSelect }) {
         {pct(row.total_pnl_pct)}
       </span>
       <span className="c-stat">
-        <span className="muted">{row.win_rate.toFixed(0)}%·{row.total_trades}T</span>
+        <span className="muted">
+          {/* 0% win when nothing has closed yet is misleading -- show "—" so
+              the user knows results are still pending. */}
+          {row.closed_trades > 0 ? `${row.win_rate.toFixed(0)}%` : '—'}
+          ·{row.total_trades}T
+        </span>
       </span>
     </button>
   )

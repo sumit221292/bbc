@@ -51,25 +51,37 @@ function Leaderboard({ data }) {
             <div className="lb-empty">No strategy fired in this window.</div>
           ) : (
             <div className="lb-rows">
-              {lb.top.map((row, idx) => (
-                <div key={`${row.strategy_id}-${row.timeframe}`} className={`lb-row rank-${idx}`}>
-                  <span className="lb-rank">{RANK_EMOJI[idx]}</span>
-                  <div className="lb-name-col">
-                    <div className="lb-name">{row.strategy_name}</div>
-                    <div className="lb-meta">
-                      <span className="lb-tf">{row.timeframe}</span>
-                      <span className="muted">·</span>
-                      <span className="muted">{row.trades}T · {row.wins}W / {row.losses}L</span>
+              {lb.top.map((row, idx) => {
+                const closed = row.wins + row.losses
+                // "100% win" with only 1 of 4 trades closed is misleading -- the
+                // remaining 3 might still flip. Tag the open count so the user
+                // can read the result honestly.
+                const winLabel = closed > 0
+                  ? `${row.win_rate.toFixed(0)}% win (${closed} closed)`
+                  : 'pending'
+                return (
+                  <div key={`${row.strategy_id}-${row.timeframe}`} className={`lb-row rank-${idx}`}>
+                    <span className="lb-rank">{RANK_EMOJI[idx]}</span>
+                    <div className="lb-name-col">
+                      <div className="lb-name">{row.strategy_name}</div>
+                      <div className="lb-meta">
+                        <span className="lb-tf">{row.timeframe}</span>
+                        <span className="muted">·</span>
+                        <span className="muted">
+                          {row.trades}T · {row.wins}W / {row.losses}L
+                          {row.open > 0 && <span className="open-tag"> · {row.open}O</span>}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="lb-stats">
+                      <div className={`lb-pnl ${row.total_pnl_pct >= 0 ? 'pos' : 'neg'}`}>
+                        {pct(row.total_pnl_pct)}
+                      </div>
+                      <div className="lb-win muted">{winLabel}</div>
                     </div>
                   </div>
-                  <div className="lb-stats">
-                    <div className={`lb-pnl ${row.total_pnl_pct >= 0 ? 'pos' : 'neg'}`}>
-                      {pct(row.total_pnl_pct)}
-                    </div>
-                    <div className="lb-win muted">{row.win_rate.toFixed(0)}% win</div>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>

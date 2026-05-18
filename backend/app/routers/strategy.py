@@ -108,6 +108,10 @@ class StrategySnapshot(BaseModel):
     win_rate: float
     total_pnl_pct: float
     total_trades: int
+    # Number of trades that have actually resolved to WIN or LOSS. The UI
+    # uses this to tell apart "0% wins because all lost" from "0% because
+    # nothing has closed yet" -- two very different stories.
+    closed_trades: int
     last_signal_time: Optional[int]
 
 
@@ -148,14 +152,21 @@ _CATEGORIES: dict[str, str] = {
 def _db_interval_for(sid: str, user_interval: str) -> str:
     """Which DB partition holds this strategy's trades.
 
-    Must match how the alert worker keys rows: MTF always runs on 1h,
-    SMC MTF on 5m, every other strategy on whichever interval the user
-    subscribed (we use the snapshot's user_interval as the closest proxy)."""
+    Must match how the alert worker keys rows. The worker's default for
+    every currently-registered strategy is 1h (subscriptions all leave
+    interval=None and _default_interval falls through to 1h). Returning
+    the user's chart interval here makes the All-tab stats vanish the
+    moment the user picks 4h or 1d, which is exactly what the user just
+    flagged. Instead, hard-code the actual storage TF:
+      - SMC MTF: 5m (entry TF)
+      - everything else: 1h
+    If the policy ever broadens to allow per-subscription intervals, this
+    needs to look up cfg.subscriptions for the matching strategy."""
     if is_smc_mtf(sid):
         return "5m"
-    if is_mtf(sid):
-        return "1h"
-    return user_interval
+    # MTF strategies always 1h; single-TF strategies also default to 1h
+    # because the worker has no other path right now.
+    return "1h"
 
 
 def _build_snapshot(
@@ -201,6 +212,7 @@ def _build_snapshot(
         win_rate=db["win_rate"],            # live-trade hit rate from DB
         total_pnl_pct=db["total_pnl_pct"],  # live-trade cumulative PnL
         total_trades=db["total"],           # live trades count
+        closed_trades=db["closed"],         # so UI can show "—" when nothing closed
         last_signal_time=last_time,
     )
 
