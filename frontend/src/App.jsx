@@ -272,6 +272,7 @@ export default function App() {
                 livePrice={livePrice}
                 strategies={strategies}
                 interval={interval}
+                symbol={symbol}
               />
             )}
             {activeTab === 'plan' && (

@@ -160,6 +160,7 @@ def _db_interval_for(sid: str, user_interval: str) -> str:
 
 def _build_snapshot(
     sid: str, name: str, signals: list[Signal], candles, user_interval: str,
+    symbol: str,
 ) -> StrategySnapshot:
     """Live signal + DB stats. The signal half (BUY/SELL/HOLD, entry, SL,
     target, mark-to-market PnL) must come from fresh candles, because that
@@ -190,7 +191,7 @@ def _build_snapshot(
         last_time = signals[-1].time if signals else None
 
     db_interval = _db_interval_for(sid, user_interval)
-    db = trade_store.stats(strategy_id=sid, interval=db_interval)
+    db = trade_store.stats(strategy_id=sid, interval=db_interval, symbol=symbol)
     return StrategySnapshot(
         id=sid, name=name,
         category=_CATEGORIES.get(sid, "Other"),
@@ -249,21 +250,22 @@ async def get_snapshot(
 
     rows: list[StrategySnapshot] = []
 
+    sym_upper = symbol.upper()
     # MTF strategies first. smc_mtf has its own context + entry timeframe (5m).
     for meta in list_mtf_metas():
         if is_smc_mtf(meta.id):
             if smc_ctx is None:
                 continue  # data fetch failed; skip rather than 500
             signals = annotate(run_smc_mtf(meta.id, smc_ctx, start_idx=60), smc_ctx.candles_5m)
-            rows.append(_build_snapshot(meta.id, meta.name, signals, smc_ctx.candles_5m, interval))
+            rows.append(_build_snapshot(meta.id, meta.name, signals, smc_ctx.candles_5m, interval, sym_upper))
         else:
             signals = annotate(run_mtf(meta.id, ctx, start_idx=50), c1h)
-            rows.append(_build_snapshot(meta.id, meta.name, signals, c1h, interval))
+            rows.append(_build_snapshot(meta.id, meta.name, signals, c1h, interval, sym_upper))
 
     # Single-TF strategies on the requested interval
     for cls in list_strategies():
         signals = annotate(cls().evaluate(c_int), c_int)
-        rows.append(_build_snapshot(cls.id, cls.name, signals, c_int, interval))
+        rows.append(_build_snapshot(cls.id, cls.name, signals, c_int, interval, sym_upper))
 
     return SnapshotResponse(
         symbol=symbol.upper(), interval=interval,
@@ -309,7 +311,8 @@ async def get_leaderboard(symbol: str = Query("BTCUSDT")):
     for meta in list_mtf_metas():
         name_for[meta.id] = meta.name
 
-    combos = trade_store.all_strategy_intervals()
+    sym_upper = symbol.upper()
+    combos = trade_store.all_strategy_intervals(symbol=sym_upper)
     now_ts = int(datetime.now(timezone.utc).timestamp())
     leaderboards: list[WindowLeaderboard] = []
 
@@ -317,7 +320,9 @@ async def get_leaderboard(symbol: str = Query("BTCUSDT")):
         cutoff = now_ts - hours * 3600
         scored: list[LeaderboardEntry] = []
         for sid, tf in combos:
-            s = trade_store.stats_in_window(cutoff, strategy_id=sid, interval=tf)
+            s = trade_store.stats_in_window(
+                cutoff, strategy_id=sid, interval=tf, symbol=sym_upper,
+            )
             if s["total"] == 0:
                 continue
             scored.append(LeaderboardEntry(

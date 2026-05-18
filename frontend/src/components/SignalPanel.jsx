@@ -111,7 +111,7 @@ function TradeCard({ trade, livePrice, index }) {
   )
 }
 
-function SignalPanel({ result, livePrice, strategies = [], interval }) {
+function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
   // Live-persisted trades from the SQLite store, scoped to the (strategy,
   // storage_interval) pair. MTF strategies always fire on 1h, SMC MTF on 5m,
   // SMC Momentum on 15m -- regardless of the chart interval the user is
@@ -127,11 +127,13 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
   const storageInterval = strategyMeta?.storage_interval || interval
 
   useEffect(() => {
-    if (!strategyId || !storageInterval) return
+    if (!strategyId || !storageInterval || !symbol) return
     let cancelled = false
     const fetchOnce = async () => {
       try {
-        const data = await getTrades({ strategy: strategyId, interval: storageInterval, limit: 50 })
+        const data = await getTrades({
+          strategy: strategyId, interval: storageInterval, symbol, limit: 50,
+        })
         if (!cancelled) setStored(data)
       } catch {
         // swallow — DB may be empty after a fresh deploy
@@ -140,7 +142,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
     fetchOnce()
     const t = setInterval(fetchOnce, 30_000)
     return () => { cancelled = true; clearInterval(t) }
-  }, [strategyId, storageInterval])
+  }, [strategyId, storageInterval, symbol])
 
   if (!result) return <div className="signal-panel"><div className="muted">Loading…</div></div>
   const { latest, signals, strategy: _sid } = result
@@ -215,7 +217,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
 
       {summary && (
         <div className="summary">
-          <div className="title">📊 Live Performance — {strategyName} · {storageInterval || '—'} (worker-fired only)</div>
+          <div className="title">📊 Live Performance — {symbol || '—'} · {strategyName} · {storageInterval || '—'} (worker-fired only)</div>
           <div className="stats">
             <div><div className="k">Total Trades</div><div className="v">{summary.total}</div></div>
             <div><div className="k">Profit Hua</div><div className="v pos">{summary.wins}</div></div>
@@ -230,7 +232,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
 
       <div className="history">
         <div className="title">
-          📜 Recent Trades — {strategyName} · {storageInterval || '—'}
+          📜 Recent Trades — {symbol || '—'} · {strategyName} · {storageInterval || '—'}
           {stored.trades.length > 0 && (
             <span className="muted small"> (saved {stored.trades.length})</span>
           )}
@@ -250,7 +252,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval }) {
           {stored.trades.length === 0 && (
             <li className="muted">
               Abhi koi live trade save nahi hua — alert worker se naya signal aate hi yaha
-              dikhega ({strategyName} · {storageInterval || '—'}).
+              dikhega ({symbol || '—'} · {strategyName} · {storageInterval || '—'}).
             </li>
           )}
         </ul>

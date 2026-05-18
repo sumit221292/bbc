@@ -96,10 +96,11 @@ export async function killAutoTrade() {
   return r.json().catch(() => ({ ok: false }))
 }
 
-export async function getTrades({ strategy, interval, limit = 200 } = {}) {
+export async function getTrades({ strategy, interval, symbol, limit = 200 } = {}) {
   const params = new URLSearchParams()
   if (strategy) params.set('strategy', strategy)
   if (interval) params.set('interval', interval)
+  if (symbol) params.set('symbol', symbol)
   params.set('limit', String(limit))
   const r = await fetch(`${BASE}/api/trades?${params.toString()}`)
   if (!r.ok) throw new Error(`trades: ${r.status}`)

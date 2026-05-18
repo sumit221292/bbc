@@ -195,23 +195,47 @@ def close_trade(
         return cur.rowcount > 0
 
 
-def open_trades(strategy_id: str, interval: str) -> list[dict[str, Any]]:
+def open_trades(strategy_id: str, interval: str, symbol: str | None = None) -> list[dict[str, Any]]:
+    sql = ("SELECT * FROM trades WHERE strategy_id = ? AND interval = ? "
+           "AND status = 'OPEN'")
+    params: list[Any] = [strategy_id, interval]
+    if symbol:
+        sql += " AND symbol = ?"
+        params.append(symbol)
+    sql += " ORDER BY signal_time ASC"
     with _lock, _connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM trades WHERE strategy_id = ? AND interval = ? "
-            "AND status = 'OPEN' ORDER BY signal_time ASC",
-            (strategy_id, interval),
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def _summarize(rows: list[Any]) -> dict[str, Any]:
+    """Shared roll-up over a list of sqlite rows with status + pnl_pct."""
+    wins = sum(1 for r in rows if r["status"] == "WIN")
+    losses = sum(1 for r in rows if r["status"] == "LOSS")
+    open_ct = sum(1 for r in rows if r["status"] == "OPEN")
+    closed = wins + losses
+    total_pnl = sum((r["pnl_pct"] or 0.0) for r in rows if r["status"] in ("WIN", "LOSS"))
+    return {
+        "total": len(rows),
+        "closed": closed,
+        "wins": wins,
+        "losses": losses,
+        "open": open_ct,
+        "win_rate": (wins / closed * 100.0) if closed else 0.0,
+        "total_pnl_pct": total_pnl,
+        "avg_pnl_pct": (total_pnl / closed) if closed else 0.0,
+    }
 
 
 def list_trades(
     strategy_id: str | None = None,
     interval: str | None = None,
+    symbol: str | None = None,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
-    """Most-recent-first list. Optional filters on strategy+interval so the
-    Live tab shows only the trades that match the current view."""
+    """Most-recent-first list. Optional filters on strategy+interval+symbol
+    so the Live tab only shows trades for the (coin, TF, strategy) the user
+    is currently viewing -- never mixes BTC trades onto an ETH chart."""
     sql = "SELECT * FROM trades"
     where: list[str] = []
     params: list[Any] = []
@@ -221,6 +245,9 @@ def list_trades(
     if interval:
         where.append("interval = ?")
         params.append(interval)
+    if symbol:
+        where.append("symbol = ?")
+        params.append(symbol)
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY signal_time DESC LIMIT ?"
@@ -233,13 +260,12 @@ def list_trades(
 def stats(
     strategy_id: str | None = None,
     interval: str | None = None,
+    symbol: str | None = None,
 ) -> dict[str, Any]:
-    """Closed-trade summary scoped to one (strategy, interval) when both are
-    set, otherwise broader. Matches the shape of trade_status.summarize() so
-    the frontend can swap data sources transparently."""
-    sql = (
-        "SELECT status, pnl_pct FROM trades"
-    )
+    """Closed-trade summary scoped to one (strategy, interval, symbol).
+    Matches the shape of trade_status.summarize() so the frontend can swap
+    data sources transparently."""
+    sql = "SELECT status, pnl_pct FROM trades"
     where: list[str] = []
     params: list[Any] = []
     if strategy_id:
@@ -248,31 +274,21 @@ def stats(
     if interval:
         where.append("interval = ?")
         params.append(interval)
+    if symbol:
+        where.append("symbol = ?")
+        params.append(symbol)
     if where:
         sql += " WHERE " + " AND ".join(where)
     with _lock, _connect() as conn:
         rows = conn.execute(sql, params).fetchall()
-    wins = sum(1 for r in rows if r["status"] == "WIN")
-    losses = sum(1 for r in rows if r["status"] == "LOSS")
-    open_ct = sum(1 for r in rows if r["status"] == "OPEN")
-    closed = wins + losses
-    total_pnl = sum((r["pnl_pct"] or 0.0) for r in rows if r["status"] in ("WIN", "LOSS"))
-    return {
-        "total": len(rows),
-        "closed": closed,
-        "wins": wins,
-        "losses": losses,
-        "open": open_ct,
-        "win_rate": (wins / closed * 100.0) if closed else 0.0,
-        "total_pnl_pct": total_pnl,
-        "avg_pnl_pct": (total_pnl / closed) if closed else 0.0,
-    }
+    return _summarize(rows)
 
 
 def stats_in_window(
     start_ts: int,
     strategy_id: str | None = None,
     interval: str | None = None,
+    symbol: str | None = None,
 ) -> dict[str, Any]:
     """Like stats() but only counts trades whose signal_time >= start_ts.
     Used by the leaderboard to rank rolling-window performance from real
@@ -285,32 +301,25 @@ def stats_in_window(
     if interval:
         sql += " AND interval = ?"
         params.append(interval)
+    if symbol:
+        sql += " AND symbol = ?"
+        params.append(symbol)
     with _lock, _connect() as conn:
         rows = conn.execute(sql, params).fetchall()
-    wins = sum(1 for r in rows if r["status"] == "WIN")
-    losses = sum(1 for r in rows if r["status"] == "LOSS")
-    open_ct = sum(1 for r in rows if r["status"] == "OPEN")
-    closed = wins + losses
-    total_pnl = sum((r["pnl_pct"] or 0.0) for r in rows if r["status"] in ("WIN", "LOSS"))
-    return {
-        "total": len(rows),
-        "closed": closed,
-        "wins": wins,
-        "losses": losses,
-        "open": open_ct,
-        "win_rate": (wins / closed * 100.0) if closed else 0.0,
-        "total_pnl_pct": total_pnl,
-        "avg_pnl_pct": (total_pnl / closed) if closed else 0.0,
-    }
+    return _summarize(rows)
 
 
-def all_strategy_intervals() -> list[tuple[str, str]]:
+def all_strategy_intervals(symbol: str | None = None) -> list[tuple[str, str]]:
     """Distinct (strategy_id, interval) pairs that have at least one trade.
-    Drives the leaderboard's iteration set."""
+    Optionally restricted to a single symbol so the leaderboard can rank
+    only the active coin without bleeding stats from other markets."""
+    sql = "SELECT DISTINCT strategy_id, interval FROM trades"
+    params: list[Any] = []
+    if symbol:
+        sql += " WHERE symbol = ?"
+        params.append(symbol)
     with _lock, _connect() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT strategy_id, interval FROM trades"
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [(r["strategy_id"], r["interval"]) for r in rows]
 
 

@@ -543,7 +543,7 @@ async def alert_loop():
                     # so the Recent Trades panel reflects outcomes regardless
                     # of whether a Telegram closure alert was queued.
                     try:
-                        for row in trade_store.open_trades(sub.strategy_id, interval):
+                        for row in trade_store.open_trades(sub.strategy_id, interval, cfg.symbol):
                             match = next((s for s in all_signals if s.time == row["signal_time"]), None)
                             if match is None or match.status not in ("WIN", "LOSS"):
                                 continue

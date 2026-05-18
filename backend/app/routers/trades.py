@@ -10,12 +10,17 @@ router = APIRouter(prefix="/api/trades", tags=["trades"])
 async def list_trades(
     strategy: str | None = Query(default=None),
     interval: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=2000),
 ):
-    """Most-recent-first list. When both strategy + interval are given the
-    response is exactly the trades a user would see for that view."""
-    rows = trade_store.list_trades(strategy_id=strategy, interval=interval, limit=limit)
-    summary = trade_store.stats(strategy_id=strategy, interval=interval)
+    """Most-recent-first list. When strategy + interval + symbol are all
+    given the response is exactly the trades a user would see for that
+    view -- never mixes coins, timeframes, or strategies."""
+    sym = symbol.upper() if symbol else None
+    rows = trade_store.list_trades(
+        strategy_id=strategy, interval=interval, symbol=sym, limit=limit,
+    )
+    summary = trade_store.stats(strategy_id=strategy, interval=interval, symbol=sym)
     return {"trades": rows, "summary": summary}
 
 
