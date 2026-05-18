@@ -38,10 +38,26 @@ function TradeCard({ trade, livePrice, index }) {
       : (trade.entry - livePrice) / trade.entry * 100
   }
 
+  // Worker resolves trades on a 60s tick, so there's a small window where
+  // the live price has already crossed the stop/target but the DB row
+  // still says OPEN. Compute the live-price-hit state so the UI flags
+  // "stop hit, pending close" immediately instead of leaving the user
+  // staring at a green CHAL RAHA card while price plunges past the stop.
+  let liveHit = null  // null | 'stop' | 'target'
+  if (trade.status === 'OPEN' && livePrice && trade.entry && trade.stop_loss && trade.target) {
+    if (trade.type === 'BUY') {
+      if (livePrice <= trade.stop_loss) liveHit = 'stop'
+      else if (livePrice >= trade.target) liveHit = 'target'
+    } else if (trade.type === 'SELL') {
+      if (livePrice >= trade.stop_loss) liveHit = 'stop'
+      else if (livePrice <= trade.target) liveHit = 'target'
+    }
+  }
+
   const outcomes = tradeOutcomes(trade)
 
   return (
-    <div className={`signal-card ${tone}`}>
+    <div className={`signal-card ${tone} ${liveHit ? `live-${liveHit}` : ''}`}>
       <div className="row">
         <span className="label">
           {index != null ? `Trade #${index + 1}` : 'Abhi Ka Price'}
@@ -50,7 +66,17 @@ function TradeCard({ trade, livePrice, index }) {
       </div>
       <div className="row">
         <span className={`badge ${tone}`}>{actionLabel(trade.type)}</span>
-        <StatusBadge status={trade.status} />
+        {liveHit === 'stop' && (
+          <span className="badge live-hit-stop" title="Live price crossed the stop -- worker will close on the next tick (~60s)">
+            ❌ STOP HIT · closing soon
+          </span>
+        )}
+        {liveHit === 'target' && (
+          <span className="badge live-hit-target" title="Live price crossed the target -- worker will close on the next tick (~60s)">
+            ✅ TARGET HIT · closing soon
+          </span>
+        )}
+        {!liveHit && <StatusBadge status={trade.status} />}
         {livePnl != null && (
           <span className={`pnl ${livePnl >= 0 ? 'pos' : 'neg'}`}>{pct(livePnl)}</span>
         )}

@@ -370,6 +370,27 @@ body {
   border-color: rgba(239,83,80,0.55);
   background: linear-gradient(180deg, rgba(239,83,80,0.05) 0%, var(--panel-2) 40%);
 }
+/* Live-price already crossed stop / target -- worker hasn't ticked yet
+   but visually we treat the trade as essentially closed. Pulsing border
+   so the user notices immediately. */
+.signal-card.live-stop {
+  border-color: rgba(255, 77, 77, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 77, 77, 0.45), 0 8px 24px rgba(255, 77, 77, 0.15);
+  background: linear-gradient(180deg, rgba(255, 77, 77, 0.10) 0%, var(--panel-2) 50%);
+}
+.signal-card.live-target {
+  border-color: rgba(0, 212, 163, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 212, 163, 0.45), 0 8px 24px rgba(0, 212, 163, 0.15);
+  background: linear-gradient(180deg, rgba(0, 212, 163, 0.10) 0%, var(--panel-2) 50%);
+}
+.badge.live-hit-stop {
+  background: rgba(255, 77, 77, 0.25); color: #ff4d4d;
+  border: 1px solid rgba(255, 77, 77, 0.5);
+}
+.badge.live-hit-target {
+  background: rgba(0, 212, 163, 0.25); color: #00d4a3;
+  border: 1px solid rgba(0, 212, 163, 0.5);
+}
 .signal-card .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
 .signal-card .label { color: var(--muted); }
 .signal-card .big { font-size: 22px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
