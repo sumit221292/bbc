@@ -281,6 +281,32 @@ def _verify_direction(sig) -> tuple[str, bool]:
     return sig.type, False
 
 
+def _fmt_price(n: float | None) -> str:
+    """Adaptive price formatter for Telegram messages. Mirrors the
+    frontend fmtPrice() in lib/format.js so the same trade reads the
+    same way in the chat and on the chart.
+
+    Rules:
+      >= 1     : 2 decimals (BTC 77,083.14 / ETH 2,117.45)
+      sub-$1   : leading-zeros + 5 significant digits, no trailing pads
+                 (DOGE 0.10579 / PEPE 0.0000123 / SHIB 0.00000789)
+    """
+    if n is None:
+        return "—"
+    import math
+    abs_n = abs(n)
+    if abs_n >= 1 or abs_n == 0:
+        return f"{n:,.2f}"
+    leading_zeros = max(0, int(math.floor(-math.log10(abs_n))))
+    decimals = min(leading_zeros + 5, 10)
+    # Round to the desired precision, then strip trailing zeros so PEPE
+    # doesn't show 0.000012300.
+    s = f"{n:.{decimals}f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s
+
+
 def _format_signal(symbol: str, name: str, sig) -> str:
     effective_type, corrected = _verify_direction(sig)
 
@@ -303,16 +329,16 @@ def _format_signal(symbol: str, name: str, sig) -> str:
             f"{sig.type} to match the actual stop/target geometry._"
         )
     if sig.entry is not None:
-        parts.append(f"*Entry:* `${sig.entry:,.2f}`")
+        parts.append(f"*Entry:* `${_fmt_price(sig.entry)}`")
     if sig.stop_loss is not None and sig.entry:
         # Directional arrow leaves no doubt: SL ↓ for BUY (below), SL ↑ for SELL (above).
         sl_arrow = "↓" if sig.stop_loss < sig.entry else "↑"
         loss_pct = abs(sig.stop_loss - sig.entry) / sig.entry * 100
-        parts.append(f"*Stop {sl_arrow}:* `${sig.stop_loss:,.2f}` (-{loss_pct:.2f}%)")
+        parts.append(f"*Stop {sl_arrow}:* `${_fmt_price(sig.stop_loss)}` (-{loss_pct:.2f}%)")
     if sig.target is not None and sig.entry:
         tp_arrow = "↑" if sig.target > sig.entry else "↓"
         prof_pct = abs(sig.target - sig.entry) / sig.entry * 100
-        parts.append(f"*Target {tp_arrow}:* `${sig.target:,.2f}` (+{prof_pct:.2f}%)")
+        parts.append(f"*Target {tp_arrow}:* `${_fmt_price(sig.target)}` (+{prof_pct:.2f}%)")
     if sig.entry and sig.stop_loss and sig.target:
         risk = abs(sig.entry - sig.stop_loss)
         if risk > 0:
@@ -325,18 +351,18 @@ def _format_closure(symbol: str, name: str, pending: PendingSignal, sig) -> str:
     """Message sent when a previously-notified open trade resolves."""
     safe_name = name.replace("*", "").replace("_", "\\_")
     if sig.status == "WIN":
-        head = f"✅ *WIN* — `{symbol}` ({pending.side} @ ${pending.entry:,.2f})"
+        head = f"✅ *WIN* — `{symbol}` ({pending.side} @ ${_fmt_price(pending.entry)})"
         exit_price = pending.target
         pnl_dir = "+"
     else:  # LOSS
-        head = f"❌ *LOSS* — `{symbol}` ({pending.side} @ ${pending.entry:,.2f})"
+        head = f"❌ *LOSS* — `{symbol}` ({pending.side} @ ${_fmt_price(pending.entry)})"
         exit_price = pending.stop
         pnl_dir = "-"
     pnl_pct = abs(sig.pnl_pct or 0.0)
     return "\n".join([
         head,
         f"*Strategy:* {safe_name}",
-        f"*Exit:* `${exit_price:,.2f}`",
+        f"*Exit:* `${_fmt_price(exit_price)}`",
         f"*P&L:* {pnl_dir}{pnl_pct:.2f}% (signal-level)",
     ])
 
@@ -563,7 +589,7 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
     at.last_trade_error = ""
     fill_price = float(entry_resp.get("fills", [{}])[0].get("price", sig.entry))
     return (
-        f"{closed_msg}✅ auto-trade: filled BUY {qty:.6f} @ ${fill_price:.2f} "
+        f"{closed_msg}✅ auto-trade: filled BUY {qty:.6f} @ ${_fmt_price(fill_price)} "
         f"(daily {at.trades_today}/{at.max_trades_per_day})"
     )
 
