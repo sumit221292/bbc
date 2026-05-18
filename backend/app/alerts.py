@@ -742,16 +742,20 @@ async def alert_loop():
                                     symbol, sub.strategy_id, latest.type, eff_type,
                                 )
 
-                            # DB-first: persist the trade BEFORE Telegram fires.
-                            # If insert fails (or the row already exists, which
-                            # we treat as "already alerted earlier"), skip the
-                            # Telegram so the chat never disagrees with what
-                            # the Live tab can show. This is the fix for the
-                            # "Telegram message came but trade not in app"
-                            # complaint.
+                            # DB-first: persist the trade BEFORE Telegram fires
+                            # so the user can never get a chat message for a
+                            # trade that isn't in the app. After insert, we
+                            # use pending_close as the "Telegram delivered"
+                            # marker -- if insert returns duplicate but we
+                            # never recorded a successful Telegram for that
+                            # exact signal_time, the broadcast is retried on
+                            # this tick. That keeps both the DB-Telegram
+                            # invariant AND a retry-until-delivered guarantee
+                            # for the notification itself.
                             has_levels = (latest.entry is not None
                                           and latest.stop_loss is not None
                                           and latest.target is not None)
+                            already_alerted = False
                             if has_levels:
                                 try:
                                     inserted = trade_store.insert_trade(
@@ -765,19 +769,31 @@ async def alert_loop():
                                         created_at=int(time.time()),
                                     )
                                 except Exception:
-                                    log.exception("insert failed for %s/%s -- aborting alert",
+                                    log.exception("insert failed for %s/%s -- will retry next tick",
                                                   symbol, sub.strategy_id)
-                                    continue  # don't fire Telegram or touch last_seen
-                                if not inserted:
-                                    # Row already existed (duplicate signal_time):
-                                    # someone else (probably an earlier tick) already
-                                    # alerted on this. Mark last_seen so we stop
-                                    # re-checking, but don't re-send the message.
-                                    log.info("[DEDUPE] %s/%s @ %s already in DB -- skipping alert",
-                                             symbol, sub.strategy_id, latest.time)
+                                    continue  # last_seen unchanged -> natural retry
+
+                                # If the row already existed AND we have a
+                                # pending_close stamped at the same signal_time,
+                                # Telegram was already delivered for it in a
+                                # prior tick. Don't re-send.
+                                pending = cfg.pending_close.get(key)
+                                already_alerted = (
+                                    not inserted
+                                    and pending is not None
+                                    and pending.time == latest.time
+                                )
+                                if already_alerted:
                                     cfg.last_seen[key] = latest.time
+                                    log.info("[DEDUPE] %s/%s @ %s already alerted",
+                                             symbol, sub.strategy_id, latest.time)
                                     changed = True
                                     continue
+                                # If insert returned False but pending_close is
+                                # NOT set (or set for a different signal_time),
+                                # the DB row landed in an earlier tick but
+                                # Telegram never confirmed delivery. Fall
+                                # through and retry the broadcast.
 
                             # Auto-trade only fires on the dedicated auto-trade
                             # symbol; the rest are Telegram + DB only.
@@ -791,6 +807,9 @@ async def alert_loop():
                             if ok:
                                 cfg.last_seen[key] = latest.time
                                 if has_levels:
+                                    # Marks "Telegram delivered for this exact
+                                    # signal_time" -- the retry-gate above
+                                    # reads this on the next tick.
                                     cfg.pending_close[key] = PendingSignal(
                                         time=latest.time, side=latest.type,
                                         entry=latest.entry, stop=latest.stop_loss,
@@ -800,9 +819,11 @@ async def alert_loop():
                                 log.info("sent alert for %s/%s @ %s",
                                          symbol, sub.strategy_id, latest.time)
                             else:
+                                # Telegram failed: leave last_seen untouched so
+                                # the next tick re-attempts the broadcast.
                                 cfg.last_error = f"{symbol}/{sub.strategy_id}: {err}"
                                 changed = True
-                                log.warning("send failed: %s", err)
+                                log.warning("send failed (will retry): %s", err)
                 cfg.last_poll = int(time.time())
                 if changed or cfg.last_poll - getattr(cfg, "last_poll", 0) > 60:
                     await save_config(cfg)
