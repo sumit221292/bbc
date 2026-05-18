@@ -150,12 +150,14 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
   // is ignored so numbers stay consistent across Live / All / Best tabs.
   const summary = stored.summary
 
-  // Worker-fired open trades from the DB are the source of truth -- a fresh
-  // backtest on the last 500 candles can re-resolve old setups differently
-  // than what the worker actually fired live. If the DB has any OPEN row for
-  // this (strategy, interval), show those. Fall back to the backtest's open
-  // signals only when the DB has nothing (e.g. brand-new subscription).
-  const dbOpenTrades = (stored.trades || [])
+  // Live Trade Signals = ONLY worker-fired DB trades. We deliberately do not
+  // fall back to backtest opens here: doing so showed analytical "if the
+  // strategy fired right now" setups as CHAL RAHA, which then disagreed with
+  // the DB-driven Live Performance summary right below ("CHAL RAHA: 0").
+  // If the user wants those signals tracked, they need to subscribe to the
+  // strategy in the Alerts tab so the worker fires + persists them. Until
+  // then, the latest backtest signal is shown as a passive "preview" card.
+  const openTrades = (stored.trades || [])
     .filter(t => t.status === 'OPEN')
     .map(t => ({
       time: t.signal_time,
@@ -168,8 +170,7 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
       reason: t.reason || '',
       price: t.entry,
     }))
-  const backtestOpen = signals.filter(s => s.status === 'OPEN')
-  const openTrades = dbOpenTrades.length > 0 ? dbOpenTrades : backtestOpen
+  const previewSignal = signals.filter(s => s.status === 'OPEN').slice(-1)[0] || null
 
   // Aggregate live mark-to-market PnL across all open trades.
   let combinedLivePnl = null
@@ -203,9 +204,8 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
         )}
       </div>
 
-      {openTrades.length === 0
-        ? <TradeCard trade={latest} livePrice={livePrice} />
-        : openTrades.map((t, i) => (
+      {openTrades.length > 0
+        ? openTrades.map((t, i) => (
             <TradeCard
               key={`${t.time}-${t.type}`}
               trade={t}
@@ -213,6 +213,31 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
               index={openTrades.length > 1 ? i : null}
             />
           ))
+        : (
+          <>
+            {/* No DB-tracked open trade -- show the HOLD card. */}
+            <TradeCard trade={latest} livePrice={livePrice} />
+            {/* Backtest analytical preview, shown only if the strategy is
+                currently producing an open setup somewhere in its history.
+                Labelled distinctly so the user knows it's NOT a worker trade. */}
+            {previewSignal && (
+              <div className="preview-banner">
+                <div className="preview-title">
+                  🔍 Analytical Preview
+                  <span className="preview-tag">not tracked · subscribe to enable</span>
+                </div>
+                <div className="preview-body muted small">
+                  Strategy is currently signalling a <b>{previewSignal.type}</b> setup
+                  near <b>${Number(previewSignal.entry || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</b>.
+                  Yeh chart pe dikha ja raha hai but worker ne abhi tak fire nahi ki.
+                  <br />
+                  <i>{strategyName}</i> ko Alerts tab mein subscribe karo to ye signals
+                  Telegram + DB mein save honge.
+                </div>
+              </div>
+            )}
+          </>
+        )
       }
 
       {summary && (
