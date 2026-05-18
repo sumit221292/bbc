@@ -150,13 +150,11 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
   // is ignored so numbers stay consistent across Live / All / Best tabs.
   const summary = stored.summary
 
-  // Live Trade Signals = ONLY worker-fired DB trades. We deliberately do not
-  // fall back to backtest opens here: doing so showed analytical "if the
-  // strategy fired right now" setups as CHAL RAHA, which then disagreed with
-  // the DB-driven Live Performance summary right below ("CHAL RAHA: 0").
-  // If the user wants those signals tracked, they need to subscribe to the
-  // strategy in the Alerts tab so the worker fires + persists them. Until
-  // then, the latest backtest signal is shown as a passive "preview" card.
+  // Live Trade Signals = ONLY worker-fired DB trades. No backtest fallback
+  // anywhere -- user's previous complaint was the backtest-driven CHAL RAHA
+  // cards flickering as price oscillated near the stop (annotate flips
+  // OPEN <-> LOSS depending on the current bar's live low). DB is stable
+  // because it only updates when the worker fires or resolves a trade.
   const openTrades = (stored.trades || [])
     .filter(t => t.status === 'OPEN')
     .map(t => ({
@@ -170,7 +168,6 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
       reason: t.reason || '',
       price: t.entry,
     }))
-  const previewSignal = signals.filter(s => s.status === 'OPEN').slice(-1)[0] || null
 
   // Aggregate live mark-to-market PnL across all open trades.
   let combinedLivePnl = null
@@ -214,29 +211,22 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
             />
           ))
         : (
-          <>
-            {/* No DB-tracked open trade -- show the HOLD card. */}
-            <TradeCard trade={latest} livePrice={livePrice} />
-            {/* Backtest analytical preview, shown only if the strategy is
-                currently producing an open setup somewhere in its history.
-                Labelled distinctly so the user knows it's NOT a worker trade. */}
-            {previewSignal && (
-              <div className="preview-banner">
-                <div className="preview-title">
-                  🔍 Analytical Preview
-                  <span className="preview-tag">not tracked · subscribe to enable</span>
-                </div>
-                <div className="preview-body muted small">
-                  Strategy is currently signalling a <b>{previewSignal.type}</b> setup
-                  near <b>${Number(previewSignal.entry || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</b>.
-                  Yeh chart pe dikha ja raha hai but worker ne abhi tak fire nahi ki.
-                  <br />
-                  <i>{strategyName}</i> ko Alerts tab mein subscribe karo to ye signals
-                  Telegram + DB mein save honge.
-                </div>
-              </div>
-            )}
-          </>
+          // No DB-tracked open trade. Show a plain "no active trade" card --
+          // never use the backtest's `latest` (which could be an unfired
+          // analytical setup and would mislead the user as it did before).
+          <div className="signal-card hold">
+            <div className="row">
+              <span className="label">Abhi Ka Price</span>
+              <span className="big">${livePrice ? Number(livePrice).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'}</span>
+            </div>
+            <div className="row">
+              <span className="badge hold">WAIT (Ruko)</span>
+            </div>
+            <div className="reason muted">
+              Worker ne {strategyName} pe abhi tak koi trade fire nahi ki.
+              Naya signal aate hi yahaan dikhega.
+            </div>
+          </div>
         )
       }
 
