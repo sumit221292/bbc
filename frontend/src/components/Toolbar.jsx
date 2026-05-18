@@ -1,21 +1,9 @@
 import { memo } from 'react'
+import SymbolPicker from './SymbolPicker.jsx'
 
 // Restricted to 1h+ -- lower TFs are too noisy for the strategy suite,
 // and the worker stores all live trades at 1h/4h/1d partitions.
 const INTERVALS = ['1h', '4h', '1d']
-// Binance is crypto-only — XAUUSDT (spot gold) doesn't exist there.
-// PAXGUSDT (Pax Gold, a 1:1 gold-backed token) tracks gold price tick-for-tick
-// and is the proper way to chart "gold" through Binance.
-const SYMBOLS = [
-  ['BTCUSDT', 'BTC/USDT'],
-  ['ETHUSDT', 'ETH/USDT'],
-  ['SOLUSDT', 'SOL/USDT'],
-  ['BNBUSDT', 'BNB/USDT'],
-  ['XRPUSDT', 'XRP/USDT'],
-  ['DOGEUSDT', 'DOGE/USDT'],
-  ['ADAUSDT', 'ADA/USDT'],
-  ['PAXGUSDT', 'PAXG/USDT (Gold)'],
-]
 
 function Toolbar({
   symbol, onSymbolChange,
@@ -30,9 +18,7 @@ function Toolbar({
     <div className="toolbar">
       <div className="group">
         <label>Coin</label>
-        <select value={symbol} onChange={e => onSymbolChange(e.target.value)}>
-          {SYMBOLS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
+        <SymbolPicker value={symbol} onChange={onSymbolChange} />
       </div>
       <div className="group">
         <label>Time</label>

@@ -111,3 +111,12 @@ export async function clearTrades() {
   const r = await fetch(`${BASE}/api/trades`, { method: 'DELETE' })
   return r.json().catch(() => ({ ok: false }))
 }
+
+export async function searchSymbols({ q = '', limit = 20 } = {}) {
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  params.set('limit', String(limit))
+  const r = await fetch(`${BASE}/api/market/symbols/search?${params.toString()}`)
+  if (!r.ok) throw new Error(`symbols/search: ${r.status}`)
+  return r.json()
+}

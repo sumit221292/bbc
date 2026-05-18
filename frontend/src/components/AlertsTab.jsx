@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react'
 import { getAlertsConfig, sendBackendTest, setAlertsConfig } from '../api.js'
+import SymbolPicker from './SymbolPicker.jsx'
 import { getTelegramUpdates } from '../lib/telegram.js'
 import AutoTradePanel from './AutoTradePanel.jsx'
 
@@ -287,43 +288,39 @@ function AlertsTab({ strategies, snapshot }) {
           <span className="title">Watch Coins</span>
           <span className="muted">{watchSymbols.length} selected</span>
         </div>
-        <div className="alerts-subs-list" style={{ marginBottom: 12 }}>
-          {[
-            ['BTCUSDT', 'BTC/USDT'],
-            ['ETHUSDT', 'ETH/USDT'],
-            ['SOLUSDT', 'SOL/USDT'],
-            ['BNBUSDT', 'BNB/USDT'],
-            ['XRPUSDT', 'XRP/USDT'],
-            ['DOGEUSDT', 'DOGE/USDT'],
-            ['ADAUSDT', 'ADA/USDT'],
-            ['PAXGUSDT', 'PAXG/USDT (Gold)'],
-          ].map(([sym, label]) => {
-            const on = watchSymbols.includes(sym)
+        {/* Chips for the current watchlist. Auto-trade target chip is locked
+            so the user can't accidentally drop the coin their money is on. */}
+        <div className="watch-chips">
+          {watchSymbols.map(sym => {
+            const locked = sym === serverState?.symbol
+            const label = sym.endsWith('USDT') ? `${sym.slice(0, -4)}/USDT` : sym
             return (
-              <label key={sym} className={`alerts-sub-row ${on ? 'on' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={on}
-                  onChange={() => {
-                    if (on) {
-                      // Don't let the user drop the auto-trade symbol from
-                      // the watchlist -- worker depends on it.
-                      if (sym === serverState?.symbol) return
-                      setWatchSymbols(watchSymbols.filter(s => s !== sym))
-                    } else {
-                      setWatchSymbols([...watchSymbols, sym])
-                    }
-                  }}
-                />
-                <span className="alerts-sub-name">
-                  {label}
-                  {sym === serverState?.symbol && (
-                    <span className="muted small"> · auto-trade target</span>
+              <span key={sym} className={`watch-chip ${locked ? 'locked' : ''}`}>
+                {label}
+                {locked
+                  ? <span className="chip-lock" title="Auto-trade target — can't remove">🔒</span>
+                  : (
+                    <button
+                      className="chip-x"
+                      onClick={() => setWatchSymbols(watchSymbols.filter(s => s !== sym))}
+                      title="Remove from watchlist"
+                    >×</button>
                   )}
-                </span>
-              </label>
+              </span>
             )
           })}
+        </div>
+        <div className="watch-add">
+          <SymbolPicker
+            value=""
+            placeholder="+ Add coin (search any Binance USDT pair)"
+            size="compact"
+            onChange={sym => {
+              if (sym && !watchSymbols.includes(sym)) {
+                setWatchSymbols([...watchSymbols, sym])
+              }
+            }}
+          />
         </div>
         <div className="muted small" style={{ marginBottom: 16, lineHeight: 1.4 }}>
           Worker har coin pe har subscribed strategy fire karega. Signals + Telegram + DB.
