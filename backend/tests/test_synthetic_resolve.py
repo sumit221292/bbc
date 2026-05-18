@@ -78,7 +78,7 @@ def scenario_strategy_silent_but_stop_hit():
     print(f"    OK -- synthetic resolve correctly closed as LOSS pnl={resolved.pnl_pct:.2f}%")
 
 
-def scenario_target_hit_after_strategy_silent():
+def scenario_sell_target_hit_after_strategy_silent():
     print("[2] SELL @ 100 (target 90) -- strategy silent, low pierces target")
     candles = [
         C(2000, 100, 101, 99, 100),
@@ -98,6 +98,49 @@ def scenario_target_hit_after_strategy_silent():
     if not near(resolved.pnl_pct, 10.0):
         fail(f"expected +10.0%, got {resolved.pnl_pct}")
     print(f"    OK -- synthetic resolve correctly closed as WIN pnl={resolved.pnl_pct:.2f}%")
+
+
+def scenario_buy_target_hit_after_strategy_silent():
+    """Same bug mirror: target hit on a BUY when the strategy went silent.
+    Without the fix this would have stayed OPEN forever instead of WIN."""
+    print("[2b] BUY @ 100 (target 110) -- strategy silent, high pierces target")
+    candles = [
+        C(2500, 100, 101, 99, 100),
+        C(2560, 100, 105, 99, 104),
+        C(2620, 104, 112, 103, 111),    # high pierces target -> WIN
+    ]
+    trade_store.insert_trade(
+        strategy_id="y2", interval="1h", symbol="BTCUSDT", signal_time=2500,
+        type_="BUY", entry=100, stop_loss=95, target=110, reason="t",
+        created_at=2500,
+    )
+    resolved = synth_resolve_one(trade_store.open_trades("y2", "1h", "BTCUSDT")[0], candles)
+    if resolved.status != "WIN":
+        fail(f"expected WIN, got {resolved.status}")
+    if not near(resolved.pnl_pct, 10.0):
+        fail(f"expected +10.0%, got {resolved.pnl_pct}")
+    print(f"    OK -- BUY target-hit closed as WIN pnl={resolved.pnl_pct:.2f}%")
+
+
+def scenario_sell_stop_hit_after_strategy_silent():
+    """Fourth corner of the matrix: SELL stop hit while strategy is silent."""
+    print("[2c] SELL @ 100 (stop 105) -- strategy silent, high pierces stop")
+    candles = [
+        C(2700, 100, 101, 99, 100),
+        C(2760, 100, 103, 99, 102),
+        C(2820, 102, 108, 101, 107),    # high pierces stop -> LOSS
+    ]
+    trade_store.insert_trade(
+        strategy_id="y3", interval="1h", symbol="BTCUSDT", signal_time=2700,
+        type_="SELL", entry=100, stop_loss=105, target=90, reason="t",
+        created_at=2700,
+    )
+    resolved = synth_resolve_one(trade_store.open_trades("y3", "1h", "BTCUSDT")[0], candles)
+    if resolved.status != "LOSS":
+        fail(f"expected LOSS, got {resolved.status}")
+    if not near(resolved.pnl_pct, -5.0):
+        fail(f"expected -5.0%, got {resolved.pnl_pct}")
+    print(f"    OK -- SELL stop-hit closed as LOSS pnl={resolved.pnl_pct:.2f}%")
 
 
 def scenario_still_open_when_neither_hit():
@@ -143,11 +186,15 @@ def scenario_symbol_isolation():
 def main():
     print(f"DB at: {trade_store.DB_PATH}")
     try:
-        scenario_strategy_silent_but_stop_hit()
-        scenario_target_hit_after_strategy_silent()
+        # Full 4-corner matrix of (BUY/SELL) x (stop hit / target hit)
+        # to prove the strategy-silent close path resolves them all.
+        scenario_strategy_silent_but_stop_hit()           # BUY -> LOSS
+        scenario_sell_target_hit_after_strategy_silent()  # SELL -> WIN
+        scenario_buy_target_hit_after_strategy_silent()   # BUY -> WIN
+        scenario_sell_stop_hit_after_strategy_silent()    # SELL -> LOSS
         scenario_still_open_when_neither_hit()
         scenario_symbol_isolation()
-        print("\nALL 4 SCENARIOS PASSED")
+        print("\nALL 6 SCENARIOS PASSED")
         return 0
     except AssertionError as e:
         print(f"\nFAIL: {e}", file=sys.stderr)
