@@ -146,7 +146,12 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
   const openTrades = (stored.trades || [])
     .filter(t => t.status === 'OPEN')
     .map(t => ({
-      time: t.signal_time,
+      // `time` drives "Trade opened ... ago". Use created_at (when the
+      // worker actually fired the alert + persisted the row) instead of
+      // signal_time (the bar's open time, which can be hours earlier and
+      // is way off when the row is filled in late by the retry path).
+      time: t.created_at || t.signal_time,
+      signal_time: t.signal_time,   // kept for chart markers / DB key
       type: t.type,
       entry: t.entry,
       stop_loss: t.stop_loss,
