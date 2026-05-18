@@ -1,9 +1,5 @@
 import { memo } from 'react'
-
-function fmt(n, d = 2) {
-  if (n == null) return '—'
-  return Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
-}
+import { fmtPrice as fmt } from '../lib/format.js'
 
 function biasInfo(bias) {
   if (bias === 'LONG')   return { cls: 'bias-long',    label: 'TEJI (BULL)',     hint: 'Sirf BUY karo' }
@@ -53,7 +49,7 @@ function MarketOutlook({ data, livePrice }) {
       <div className="outlook-section">
         <div className="section-title">📊 Market Regime (kaisa market hai)</div>
         <div className="kv-grid">
-          <div><div className="k">Daily Trend</div><div className="v">{regimeLabel(regime.daily)} <span className="muted">(ADX {regime.daily_adx.toFixed(0)})</span></div></div>
+          <div><div className="k">Daily Trend</div><div className="v">{regimeLabel(regime.daily)} <span className="muted">(ADX {regime.daily_adx != null ? regime.daily_adx.toFixed(0) : '—'})</span></div></div>
           <div><div className="k">4-Hour Trend</div><div className="v">{regimeLabel(regime.h4)}</div></div>
           <div><div className="k">RSI (1d)</div><div className="v">{levels.rsi_d.toFixed(0)} <span className="muted">{levels.rsi_label}</span></div></div>
           <div><div className="k">Live Price</div><div className="v">${fmt(price)}</div></div>

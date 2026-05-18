@@ -1,15 +1,6 @@
 import { memo, useEffect, useState } from 'react'
 import { getTrades } from '../api.js'
-
-function fmt(n, d = 2) {
-  return n == null ? '—' : Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
-}
-
-function pct(n) {
-  if (n == null) return '—'
-  const sign = n >= 0 ? '+' : ''
-  return `${sign}${n.toFixed(2)}%`
-}
+import { fmtPrice as fmt, fmtPct as pct } from '../lib/format.js'
 
 function StatusBadge({ status }) {
   if (!status) return null

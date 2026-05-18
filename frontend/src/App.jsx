@@ -6,6 +6,7 @@ import Toolbar from './components/Toolbar.jsx'
 import SignalPanel from './components/SignalPanel.jsx'
 import MarketOutlook from './components/MarketOutlook.jsx'
 import StrategyOverview from './components/StrategyOverview.jsx'
+import { fmtPrice } from './lib/format.js'
 import Leaderboard from './components/Leaderboard.jsx'
 import AlertsTab from './components/AlertsTab.jsx'
 import Resizer from './components/Resizer.jsx'
@@ -234,7 +235,7 @@ export default function App() {
         <div className="live-price-wrap">
           <div className="live-price-label">Live Price</div>
           <div className="live-price">
-            {livePrice ? `$${Number(livePrice).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}
+            {livePrice ? `$${fmtPrice(livePrice)}` : '—'}
           </div>
         </div>
       </header>

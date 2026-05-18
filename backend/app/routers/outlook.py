@@ -4,6 +4,7 @@ Returns the bias, key levels, volatility and a trade plan as JSON. The
 frontend renders this in the Plan tab card.
 """
 import asyncio
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -27,10 +28,13 @@ class CurrentInfo(BaseModel):
 
 class RegimeInfo(BaseModel):
     daily: str
-    daily_adx: float
+    # ADX needs 14 bars, EMA50 needs 50, EMA200 needs 200. Newer pairs
+    # (e.g. XAUTUSDT with only ~50 daily bars) cannot compute the longer
+    # EMAs, so we return None instead of failing the whole outlook.
+    daily_adx: Optional[float] = None
     h4: str
-    ema50_d: float
-    ema200_d: float
+    ema50_d: Optional[float] = None
+    ema200_d: Optional[float] = None
 
 
 class LevelsInfo(BaseModel):
@@ -95,13 +99,25 @@ async def get_outlook(symbol: str = Query("BTCUSDT")):
     d_regime = ctx.daily_regime_at(last.time, adx_min=20.0)
     h4_regime = ctx.h4_regime_at(last.time)
 
+    # Newer pairs (e.g. XAUTUSDT) may have fewer than 200 daily candles, so
+    # the longer EMAs come back as None. Bollinger / ADX / ATR / RSI need a
+    # minimum of 14-20 bars which is fine in practice; insufficient data is
+    # surfaced as a clean 400 instead of a downstream Pydantic crash.
+    if len(c1d) < 20:
+        raise HTTPException(
+            400,
+            f"Not enough daily history for {symbol.upper()} "
+            f"({len(c1d)} bars; need >= 20)",
+        )
+
     closes_d = [c.close for c in c1d]
     highs_d = [c.high for c in c1d]
     lows_d = [c.low for c in c1d]
     d_e20 = ema(closes_d, 20)[-1]
-    d_e50 = ema(closes_d, 50)[-1]
-    d_e200 = ema(closes_d, 200)[-1]
-    d_adx, _, _ = adx(highs_d, lows_d, closes_d, 14)
+    d_e50 = ema(closes_d, 50)[-1]    # may be None if < 50 bars
+    d_e200 = ema(closes_d, 200)[-1]  # may be None if < 200 bars
+    d_adx_arr, _, _ = adx(highs_d, lows_d, closes_d, 14)
+    d_adx_val = d_adx_arr[-1]        # may be None on very short history
     d_atr = atr(highs_d, lows_d, closes_d, 14)[-1]
     d_rsi = rsi(closes_d, 14)[-1]
     bbu, bbm, bbl = bollinger(closes_d, 20, 2.0)
@@ -114,6 +130,11 @@ async def get_outlook(symbol: str = Query("BTCUSDT")):
     today_chg = (today_d.close - today_d.open) / today_d.open * 100.0
     yest_chg = (yest_d.close - yest_d.open) / yest_d.open * 100.0
 
+    # EMA50 is used as a target/anchor in BEAR/BULL plans. When unavailable
+    # (very-new pair), fall back to the relevant 20-day swing extreme so the
+    # plan still renders without a hard None reference.
+    e50_safe = d_e50 if d_e50 is not None else (swing_high + swing_low) / 2
+
     # Build trade plan based on regime
     if d_regime == "BULL":
         bias = "LONG"
@@ -125,7 +146,7 @@ async def get_outlook(symbol: str = Query("BTCUSDT")):
         short_trigger = "Counter-trend; only at major resistance"
         short_entry_zone = swing_high
         short_stop = swing_high + d_atr * 0.5
-        short_target = d_e50
+        short_target = e50_safe
     elif d_regime == "BEAR":
         bias = "SHORT"
         summary = "Daily downtrend confirmed by ADX. Sell rallies; avoid longs."
@@ -136,12 +157,20 @@ async def get_outlook(symbol: str = Query("BTCUSDT")):
         long_trigger = "Counter-trend; only at major support"
         long_entry_zone = swing_low
         long_stop = swing_low - d_atr * 0.5
-        long_target = d_e50
-    else:  # CHOP
+        long_target = e50_safe
+    else:  # CHOP or UNKNOWN (e.g. when EMA200 is unavailable on a new pair)
         bias = "NEUTRAL"
+        adx_blurb = (
+            f"ADX={d_adx_val:.1f}" if d_adx_val is not None
+            else "ADX unavailable"
+        )
+        not_enough = (d_e200 is None)
         summary = (
-            f"Daily is in CHOP (ADX={d_adx[-1]:.1f}). Range-trade key levels; "
-            "do NOT chase moves from the middle of the range."
+            (f"Insufficient daily history for full regime read ({adx_blurb}). "
+             "Range-trade key levels; treat as CHOP.")
+            if not_enough
+            else (f"Daily is in CHOP ({adx_blurb}). Range-trade key levels; "
+                  "do NOT chase moves from the middle of the range.")
         )
         long_trigger = "Price near BB lower AND 1h RSI < 30"
         long_entry_zone = bbl
@@ -162,7 +191,7 @@ async def get_outlook(symbol: str = Query("BTCUSDT")):
             yesterday_close=yest_d.close, yesterday_change_pct=yest_chg,
         ),
         regime=RegimeInfo(
-            daily=d_regime, daily_adx=d_adx[-1], h4=h4_regime,
+            daily=d_regime, daily_adx=d_adx_val, h4=h4_regime,
             ema50_d=d_e50, ema200_d=d_e200,
         ),
         levels=LevelsInfo(
