@@ -6,6 +6,11 @@ export function useLiveKlines({ symbol = 'BTCUSDT', interval = '1m' } = {}) {
   const wsRef = useRef(null)
 
   useEffect(() => {
+    // Drop the previous symbol/interval's candle as soon as the inputs change
+    // so the header "Live Price" and downstream PnL calcs do not keep
+    // flashing the prior coin's price while the new stream connects.
+    setLast(null)
+
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const url = `${proto}://${window.location.host}/ws/klines?symbol=${symbol}&interval=${interval}`
     let alive = true
