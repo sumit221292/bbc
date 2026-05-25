@@ -123,7 +123,11 @@ class SnapshotResponse(BaseModel):
 
 
 # Map strategy id -> category (matches the frontend dropdown groups).
+# Entries for unregistered strategies kept around so historical DB rows
+# (from before the registry cleanup) still get a category label in the
+# All-tab when they surface.
 _CATEGORIES: dict[str, str] = {
+    "confluence": "Confluence",
     "mtf_chop_aware": "Recommended (Multi-TF)",
     "mtf_strict": "Recommended (Multi-TF)",
     "mtf_2screen": "Recommended (Multi-TF)",

@@ -2,35 +2,48 @@
 
 The registry is intentionally a plain dict — no decorators, no metaclass magic.
 That keeps the strategy classes trivially testable in isolation.
+
+REGISTRY POLICY (post-data-review of 1741 worker-fired trades):
+  - Strategies with persistent negative PnL across multiple coins are not
+    exposed via _STRATEGIES so the worker stops firing them. Class files
+    stay on disk; re-enable by adding the class to the tuple below.
+  - Removed: SwingSRBounce (-97%), MACDCross (-40%), BollingerReversion (-40%),
+    Breakout (-32%), BestTrade (-24% / 0% WR), IchimokuCross (-22%),
+    SMCTrendLiquidity-style imports never lived here, TrendFollowing (-19%).
+  - Confluence is the new combined-edge strategy that votes across the
+    surviving profitable strategies; see strategies/confluence.py.
 """
 from .base import Strategy
-from .best import BestTrade
+
+# --- Surviving / profitable strategies ---
 from .scalping import ScalpingRSI
 from .day_trading import DayTradingEMACross
-from .swing import SwingSRBounce
-from .trend_following import TrendFollowing
-from .breakout import Breakout
-from .macd_cross import MACDCross
-from .bollinger_rev import BollingerReversion
 from .supertrend_flip import SuperTrendFlip
 from .donchian_turtle import DonchianTurtle
-from .ichimoku_cross import IchimokuCross
 from .stochastic_rev import StochasticReversal
 from .adx_trend import ADXTrend
 from .champion import Champion
 from .price_action import PriceAction
-# SMCMomentum is intentionally not registered -- it's tuned for 5m/15m and the
-# app is restricted to 1h/4h/1d. The class stays in smc_momentum.py for reuse
-# if the policy changes later.
+from .confluence import Confluence
+
+# --- Class files kept on disk but NOT registered (consistently negative PnL) ---
+# from .best import BestTrade            #  0% WR, -23.57% PnL over 18 trades
+# from .swing import SwingSRBounce       # 38% WR, -97.67% PnL over 358 trades
+# from .trend_following import TrendFollowing  # 51% WR but -19% PnL (bad RR)
+# from .breakout import Breakout         # 37% WR, -31.71% PnL
+# from .macd_cross import MACDCross      # 13% WR, -39.59% PnL
+# from .bollinger_rev import BollingerReversion # 25% WR, -40.12% PnL
+# from .ichimoku_cross import IchimokuCross     # 19% WR, -22.44% PnL
 
 
-# 'champion' first so it's the most prominent in the UI.
+# Order matters: Confluence first so the UI surfaces the highest-quality
+# meta-strategy at the top of the picker.
 _STRATEGIES: dict[str, type[Strategy]] = {
     cls.id: cls for cls in (
-        Champion, BestTrade, PriceAction,
-        ScalpingRSI, DayTradingEMACross, SwingSRBounce, TrendFollowing, Breakout,
-        MACDCross, BollingerReversion, SuperTrendFlip, DonchianTurtle,
-        IchimokuCross, StochasticReversal, ADXTrend,
+        Confluence,
+        Champion, PriceAction,
+        DonchianTurtle, SuperTrendFlip, StochasticReversal, ADXTrend,
+        ScalpingRSI, DayTradingEMACross,
     )
 }
 

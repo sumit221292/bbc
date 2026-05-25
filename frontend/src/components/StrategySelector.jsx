@@ -7,32 +7,28 @@ const CATEGORIES = [
     ids: ['mtf_chop_aware', 'mtf_strict', 'mtf_2screen', 'mtf_chop_only'],
   },
   {
+    label: '🎯 Confluence (3+ voters agree — highest quality)',
+    ids: ['confluence'],
+  },
+  {
     label: '🏆 Champion (regime-adaptive, all-in-one)',
     ids: ['champion'],
-  },
-  {
-    label: '⚡ Selective (kam trade, high quality)',
-    ids: ['best'],
-  },
-  {
-    label: '🧠 Smart Money (ICT/SMC concepts — 1h)',
-    ids: ['smc_trend_liq'],
   },
   {
     label: '📊 Price Action (pure candle structure — no indicators)',
     ids: ['price_action'],
   },
   {
-    label: '📈 Trend Following (jab trend strong ho)',
-    ids: ['trend_following', 'day_trading', 'adx_trend', 'macd', 'supertrend', 'ichimoku'],
+    label: '🚀 Breakout / Trend (Donchian, SuperTrend)',
+    ids: ['donchian', 'supertrend'],
   },
   {
-    label: '🔁 Mean Reversion (sideways/range market)',
-    ids: ['bollinger', 'stochastic', 'swing', 'scalping'],
+    label: '🔁 Mean Reversion (Stochastic, Scalping)',
+    ids: ['stochastic', 'scalping'],
   },
   {
-    label: '🚀 Breakout (consolidation tootne pe)',
-    ids: ['breakout', 'donchian'],
+    label: '📈 Trend Following (single-TF)',
+    ids: ['day_trading', 'adx_trend'],
   },
 ]
 
