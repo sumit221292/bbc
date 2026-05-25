@@ -9,6 +9,7 @@ import StrategyOverview from './components/StrategyOverview.jsx'
 import { fmtPrice } from './lib/format.js'
 import Leaderboard from './components/Leaderboard.jsx'
 import AlertsTab from './components/AlertsTab.jsx'
+import TradesTab from './components/TradesTab.jsx'
 import Resizer from './components/Resizer.jsx'
 import { getIndicators, getKlines, getLeaderboard, getOutlook, getStrategies, getStrategySnapshot, runStrategy } from './api.js'
 import { useLiveKlines } from './hooks/useLiveKlines.js'
@@ -218,6 +219,7 @@ export default function App() {
     { id: 'live',   icon: '📊', label: 'Live' },
     { id: 'plan',   icon: '📋', label: 'Plan' },
     { id: 'all',    icon: '🎯', label: 'All' },
+    { id: 'trades', icon: '📈', label: 'Trades' },
     { id: 'best',   icon: '🏆', label: 'Best' },
     { id: 'alerts', icon: '🔔', label: 'Alerts' },
   ]
@@ -308,6 +310,9 @@ export default function App() {
                 selectedId={strategyId}
                 onSelect={handleStrategySelect}
               />
+            )}
+            {activeTab === 'trades' && (
+              <TradesTab strategies={strategies} />
             )}
             {activeTab === 'best' && (
               <Leaderboard data={leaderboard} />
