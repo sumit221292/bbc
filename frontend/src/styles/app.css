@@ -722,6 +722,12 @@ body {
 .ts-value .pos { color: var(--buy); }
 .ts-value .neg { color: var(--sell); }
 
+.trades-hint {
+  padding: 4px 8px;
+  background: rgba(243,156,18,0.08); border-left: 3px solid #f39c12;
+  border-radius: 4px;
+}
+
 .trades-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: 60vh; overflow-y: auto;

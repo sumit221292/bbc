@@ -9,6 +9,10 @@ import { fmtPrice as fmt, fmtPct as pct, timeAgo, fmtIST } from '../lib/format.j
 function TradesTab({ strategies = [] }) {
   const [strategyFilter, setStrategyFilter] = useState('')   // '' = All
   const [coinFilter, setCoinFilter] = useState('')           // '' = All
+  // Min win-rate cutoff applied per (strategy, coin) combo. 0 = show all.
+  // New combos (no closed trades yet) always pass through so insufficient
+  // data isn't punished -- only proven losers get filtered out.
+  const [minWR, setMinWR] = useState(0)
   const [data, setData] = useState({ trades: [], summary: null })
   const [pairs, setPairs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -58,8 +62,51 @@ function TradesTab({ strategies = [] }) {
     return m
   }, [strategies])
 
-  const summary = data.summary
-  const trades = data.trades || []
+  // Fast lookup keyed by "strategyId::symbol" so the WR filter can decide
+  // whether each trade's combo clears the threshold in O(1).
+  const pairsByKey = useMemo(() => {
+    const m = {}
+    for (const p of pairs) m[`${p.strategy_id}::${p.symbol}`] = p
+    return m
+  }, [pairs])
+
+  const rawTrades = data.trades || []
+
+  // Apply the WR filter on the frontend so the summary card and the
+  // visible row count stay in sync. Combos with 0 closed trades pass
+  // through -- we don't want a single 0/1 to permanently hide a brand-new
+  // pair before it has had time to prove itself.
+  const trades = useMemo(() => {
+    if (!minWR) return rawTrades
+    return rawTrades.filter(t => {
+      const p = pairsByKey[`${t.strategy_id}::${t.symbol}`]
+      if (!p || p.closed === 0) return true
+      return p.win_rate >= minWR
+    })
+  }, [rawTrades, minWR, pairsByKey])
+
+  // Hidden combo count -- shown as a small hint so the user knows the
+  // filter is doing something even when most trades pass through.
+  const hiddenCount = rawTrades.length - trades.length
+
+  // Re-roll the summary from the FILTERED list so the totals match what
+  // the user actually sees. Backend's summary was computed pre-filter.
+  const summary = useMemo(() => {
+    if (!minWR) return data.summary
+    const wins = trades.filter(t => t.status === 'WIN').length
+    const losses = trades.filter(t => t.status === 'LOSS').length
+    const open = trades.filter(t => t.status === 'OPEN').length
+    const closed = wins + losses
+    const total_pnl_pct = trades.reduce(
+      (acc, t) => acc + (t.status !== 'OPEN' ? (t.pnl_pct || 0) : 0), 0,
+    )
+    return {
+      total: trades.length, wins, losses, open, closed,
+      win_rate: closed > 0 ? (wins / closed) * 100 : 0,
+      total_pnl_pct,
+      avg_pnl_pct: closed > 0 ? total_pnl_pct / closed : 0,
+    }
+  }, [data.summary, trades, minWR])
 
   return (
     <div className="trades-tab">
@@ -90,10 +137,22 @@ function TradesTab({ strategies = [] }) {
             ))}
           </select>
         </label>
-        {(strategyFilter || coinFilter) && (
+        <label>
+          <span className="muted small" title="Hides trades from (strategy, coin) combos whose win rate is below this. New combos (no closed trades) always show.">Min WR</span>
+          <select
+            value={minWR}
+            onChange={e => setMinWR(Number(e.target.value))}
+          >
+            <option value={0}>Any</option>
+            <option value={40}>≥ 40%</option>
+            <option value={50}>≥ 50%</option>
+            <option value={60}>≥ 60%</option>
+          </select>
+        </label>
+        {(strategyFilter || coinFilter || minWR > 0) && (
           <button
             className="trades-clear"
-            onClick={() => { setStrategyFilter(''); setCoinFilter('') }}
+            onClick={() => { setStrategyFilter(''); setCoinFilter(''); setMinWR(0) }}
             title="Reset filters"
           >× Clear</button>
         )}
@@ -139,6 +198,13 @@ function TradesTab({ strategies = [] }) {
       {!loading && trades.length === 0 && (
         <div className="muted small" style={{ padding: 12 }}>
           No trades match this filter yet.
+        </div>
+      )}
+
+      {minWR > 0 && hiddenCount > 0 && (
+        <div className="trades-hint muted small">
+          🛡 Hiding {hiddenCount} trade{hiddenCount === 1 ? '' : 's'} from
+          combos with WR &lt; {minWR}%
         </div>
       )}
 
