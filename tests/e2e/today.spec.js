@@ -259,6 +259,59 @@ test.describe('Today\'s features — Confluence + Phase C chips + Trades tab', (
     expect(errors, errors.join('\n')).toHaveLength(0)
   })
 
+  test('Picker — search endpoint returns only price >= $1 coins', async ({ request }) => {
+    const r = await request.get('/api/market/symbols/search?limit=50')
+    expect(r.status()).toBe(200)
+    const data = await r.json()
+    expect(Array.isArray(data.pairs)).toBe(true)
+    expect(data.pairs.length).toBeGreaterThan(0)
+    // Every returned pair must carry a `price` field and clear the $1 floor.
+    for (const p of data.pairs) {
+      expect(p).toHaveProperty('price')
+      expect(p.price, `${p.symbol} is below $1: ${p.price}`).toBeGreaterThanOrEqual(1.0)
+    }
+    // Sanity: famous sub-$1 coins must NOT appear.
+    const symbols = new Set(data.pairs.map(p => p.symbol))
+    for (const banned of ['DOGEUSDT', 'PEPEUSDT', 'SHIBUSDT', 'BONKUSDT']) {
+      expect(symbols.has(banned), `${banned} should be filtered out`).toBeFalsy()
+    }
+  })
+
+  test('Picker — typing a banned sub-$1 coin returns no match', async ({ page }) => {
+    const errors = []
+    attachConsoleCollector(page, errors)
+    await page.goto('/')
+
+    const picker = page.locator('.toolbar .symbol-picker .sp-input').first()
+    await expect(picker).toBeVisible({ timeout: 10_000 })
+    await picker.click()
+    await picker.fill('DOGE')
+    await page.waitForTimeout(800)
+
+    // The dropdown either shows the empty state or simply zero rows.
+    const rows = page.locator('.toolbar .sp-results .sp-row')
+    const empty = page.locator('.toolbar .sp-empty')
+    const noRows = (await rows.count()) === 0
+    const hasEmpty = await empty.isVisible().catch(() => false)
+    expect(noRows || hasEmpty).toBeTruthy()
+
+    expect(errors, errors.join('\n')).toHaveLength(0)
+  })
+
+  test('DB wipe — trades + stats-by-pair are empty post-deploy', async ({ request }) => {
+    const t = await request.get('/api/trades?limit=10')
+    expect(t.status()).toBe(200)
+    const tradesJson = await t.json()
+    expect(tradesJson.trades).toEqual([])
+    expect(tradesJson.summary.total).toBe(0)
+    expect(tradesJson.summary.closed).toBe(0)
+
+    const s = await request.get('/api/trades/stats-by-pair')
+    expect(s.status()).toBe(200)
+    const statsJson = await s.json()
+    expect(statsJson.pairs).toEqual([])
+  })
+
   test('API — /api/trades/stats-by-pair returns rolled-up rows', async ({ request }) => {
     const r = await request.get('/api/trades/stats-by-pair')
     expect(r.status()).toBe(200)
