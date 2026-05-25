@@ -421,6 +421,45 @@ def per_strategy_stats() -> list[dict[str, Any]]:
     return out
 
 
+def per_pair_stats() -> list[dict[str, Any]]:
+    """Roll-up grouped by (strategy_id, symbol). Drives the per-coin chip
+    stats under each subscribed strategy in the AlertsTab — user can see
+    at a glance which (strategy, coin) combos have edge before excluding."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT strategy_id, symbol,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN status = 'WIN'  THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN status = 'LOSS' THEN 1 ELSE 0 END) AS losses,
+                   SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) AS open_ct,
+                   SUM(CASE WHEN status IN ('WIN','LOSS')
+                            THEN pnl_pct ELSE 0 END) AS total_pnl_pct,
+                   MAX(signal_time) AS last_signal_time
+              FROM trades
+          GROUP BY strategy_id, symbol
+          ORDER BY strategy_id, symbol
+            """
+        ).fetchall()
+    out = []
+    for r in rows:
+        closed = (r["wins"] or 0) + (r["losses"] or 0)
+        out.append({
+            "strategy_id": r["strategy_id"],
+            "symbol": r["symbol"],
+            "total": r["total"],
+            "wins": r["wins"] or 0,
+            "losses": r["losses"] or 0,
+            "open": r["open_ct"] or 0,
+            "closed": closed,
+            "win_rate": ((r["wins"] or 0) / closed * 100.0) if closed else 0.0,
+            "total_pnl_pct": r["total_pnl_pct"] or 0.0,
+            "avg_pnl_pct": ((r["total_pnl_pct"] or 0.0) / closed) if closed else 0.0,
+            "last_signal_time": r["last_signal_time"] or 0,
+        })
+    return out
+
+
 def clear_all() -> int:
     """Wipe every row. Returns how many were removed."""
     with _lock, _connect() as conn:

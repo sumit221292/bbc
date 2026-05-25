@@ -111,6 +111,12 @@ export async function getTrades({ strategy, interval, symbol, limit = 200 } = {}
 // also removed so trade history cannot be wiped over HTTP. Use the
 // Railway volume directly if a manual reset is ever required.
 
+export async function getTradeStatsByPair() {
+  const r = await fetch(`${BASE}/api/trades/stats-by-pair`)
+  if (!r.ok) throw new Error(`stats-by-pair: ${r.status}`)
+  return r.json()
+}
+
 export async function searchSymbols({ q = '', limit = 20 } = {}) {
   const params = new URLSearchParams()
   if (q) params.set('q', q)

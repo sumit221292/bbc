@@ -641,13 +641,24 @@ body {
   font-size: 10px;
 }
 .asr-coin {
-  padding: 2px 8px;
-  font-size: 10px; font-weight: 600;
-  border-radius: 999px;
+  display: inline-flex; flex-direction: column; align-items: center;
+  gap: 1px;
+  padding: 3px 9px 4px;
+  font-weight: 600;
+  border-radius: 8px;
   border: 1px solid transparent;
   cursor: pointer;
   transition: all 0.1s;
+  line-height: 1.1;
 }
+.asr-coin .asr-coin-sym { font-size: 10px; }
+.asr-coin .asr-coin-stat {
+  font-size: 9px; font-weight: 500;
+  opacity: 0.85;
+}
+.asr-coin .asr-coin-stat.pos { color: var(--buy); }
+.asr-coin .asr-coin-stat.neg { color: var(--sell); }
+.asr-coin .asr-coin-stat.flat { color: var(--muted); }
 .asr-coin.on {
   background: rgba(38,166,154,0.18);
   border-color: rgba(38,166,154,0.4);
@@ -658,8 +669,8 @@ body {
   background: transparent;
   border-color: var(--border);
   color: var(--muted);
-  text-decoration: line-through;
 }
+.asr-coin.off .asr-coin-sym { text-decoration: line-through; }
 .asr-coin.off:hover {
   color: var(--fg);
   border-color: var(--muted);

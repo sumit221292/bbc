@@ -1,5 +1,5 @@
-import { memo, useEffect, useState } from 'react'
-import { getAlertsConfig, sendBackendTest, setAlertsConfig } from '../api.js'
+import { memo, useEffect, useMemo, useState } from 'react'
+import { getAlertsConfig, getTradeStatsByPair, sendBackendTest, setAlertsConfig } from '../api.js'
 import SymbolPicker from './SymbolPicker.jsx'
 import { getTelegramUpdates } from '../lib/telegram.js'
 import AutoTradePanel from './AutoTradePanel.jsx'
@@ -29,6 +29,23 @@ function AlertsTab({ strategies, snapshot }) {
   // Multi-coin watchlist. The worker fires signals for every (symbol,
   // strategy) pair every tick. Auto-trade still uses serverState.symbol.
   const [watchSymbols, setWatchSymbols] = useState(['BTCUSDT'])
+  // Per-(strategy_id, symbol) stats from /api/trades/stats-by-pair.
+  // Refreshed on mount + after save so the chip badges reflect the
+  // latest worker-fired trade outcomes.
+  const [pairStats, setPairStats] = useState([])
+
+  const refreshPairStats = () => {
+    getTradeStatsByPair()
+      .then(d => setPairStats(d.pairs || []))
+      .catch(() => { /* offline ok */ })
+  }
+
+  // Build a fast lookup: { "strategyId::symbol" -> stats row }.
+  const pairStatsByKey = useMemo(() => {
+    const m = {}
+    for (const p of pairStats) m[`${p.strategy_id}::${p.symbol}`] = p
+    return m
+  }, [pairStats])
 
   // Pull current config on mount
   useEffect(() => {
@@ -43,8 +60,10 @@ function AlertsTab({ strategies, snapshot }) {
       setSubs(s.subscriptions || [])
       setWatchSymbols(s.symbols && s.symbols.length > 0 ? s.symbols : [s.symbol || 'BTCUSDT'])
     }).catch(() => { /* offline ok */ })
+    refreshPairStats()
     const id = setInterval(() => {
       getAlertsConfig().then(setServerState).catch(() => {})
+      refreshPairStats()
     }, 30000)
     return () => clearInterval(id)
   }, [])
@@ -377,17 +396,30 @@ function AlertsTab({ strategies, snapshot }) {
                     {watchSymbols.map(sym => {
                       const off = isExcluded(s.id, sym)
                       const label = sym.endsWith('USDT') ? sym.slice(0, -4) : sym
+                      const st = pairStatsByKey[`${s.id}::${sym}`]
+                      const closed = st?.closed ?? 0
+                      const wr = st?.win_rate ?? 0
+                      const pnl = st?.total_pnl_pct ?? 0
+                      const pnlTone =
+                        pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'flat'
+                      const statText = closed > 0
+                        ? `${Math.round(wr)}% · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}%`
+                        : 'new'
+                      const tip = closed > 0
+                        ? `${s.name} on ${sym}: ${closed} closed (${st.wins}W/${st.losses}L), ` +
+                          `${wr.toFixed(1)}% WR, ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% cumulative` +
+                          `\nClick to ${off ? 'enable' : 'silence'}`
+                        : `${s.name} on ${sym}: no trades yet\nClick to ${off ? 'enable' : 'silence'}`
                       return (
                         <button
                           key={sym}
                           type="button"
                           className={`asr-coin ${off ? 'off' : 'on'}`}
                           onClick={() => toggleExclusion(s.id, sym)}
-                          title={off
-                            ? `Click to enable ${s.name} on ${sym}`
-                            : `Click to silence ${s.name} on ${sym}`}
+                          title={tip}
                         >
-                          {label}
+                          <span className="asr-coin-sym">{label}</span>
+                          <span className={`asr-coin-stat ${pnlTone}`}>{statText}</span>
                         </button>
                       )
                     })}

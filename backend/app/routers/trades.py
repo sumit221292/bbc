@@ -30,6 +30,14 @@ async def all_stats():
     return {"groups": trade_store.per_strategy_stats()}
 
 
+@router.get("/stats-by-pair")
+async def stats_by_pair():
+    """Per-(strategy, symbol) summary. Lets the AlertsTab show inline
+    win-rate + PnL under each coin chip so the user can data-drive
+    their per-coin exclusions instead of guessing."""
+    return {"pairs": trade_store.per_pair_stats()}
+
+
 # NOTE: a DELETE /api/trades endpoint used to live here but was removed
 # at the user's request -- the worker spends days building up trade
 # history and a single accidental curl could wipe everything. The
