@@ -607,21 +607,62 @@ body {
   max-height: 320px; overflow-y: auto;
 }
 .alerts-sub-row {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; flex-direction: column; gap: 6px;
   padding: 6px 8px; background: var(--bg); border-radius: 4px;
-  cursor: pointer; transition: background 0.1s;
+  transition: background 0.1s;
 }
-.alerts-sub-row:hover { background: var(--border); }
 .alerts-sub-row.on {
   border-left: 3px solid var(--buy);
   padding-left: 5px;
   background: rgba(38,166,154,0.08);
 }
+.alerts-sub-row .asr-head {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer;
+}
+.alerts-sub-row .asr-head:hover { color: var(--fg); }
 .alerts-sub-row input { cursor: pointer; }
 .alerts-sub-name {
   font-size: 11px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   flex: 1; min-width: 0;
+}
+.asr-excl-count {
+  flex-shrink: 0;
+  color: var(--sell);
+  font-weight: 600;
+}
+.asr-coins {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  padding-left: 24px;   /* indent to align under strategy name */
+}
+.asr-coins-label {
+  margin-right: 2px;
+  font-size: 10px;
+}
+.asr-coin {
+  padding: 2px 8px;
+  font-size: 10px; font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.asr-coin.on {
+  background: rgba(38,166,154,0.18);
+  border-color: rgba(38,166,154,0.4);
+  color: var(--buy);
+}
+.asr-coin.on:hover { background: rgba(38,166,154,0.28); }
+.asr-coin.off {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.asr-coin.off:hover {
+  color: var(--fg);
+  border-color: var(--muted);
 }
 
 .alerts-foot {

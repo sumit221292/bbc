@@ -139,14 +139,30 @@ async def update_alerts_config(payload: ConfigUpdate):
     has_full = bool(cfg.token and has_chat and payload.subscriptions)
     cfg.enabled = payload.enabled if not has_full else True
 
+    # Normalise each subscription's exclusion list: upper-case to match
+    # cfg.symbols, drop blanks + dupes. Done in-place on the payload so
+    # the cross-product below sees the cleaned values.
+    for s in payload.subscriptions:
+        seen_ex: set[str] = set()
+        norm: list[str] = []
+        for sym in s.excluded:
+            u = (sym or "").strip().upper()
+            if u and u not in seen_ex:
+                seen_ex.add(u)
+                norm.append(u)
+        s.excluded = norm
+
     # last_seen keys are now "symbol::strategy_id" composites. Sync to the
-    # cross product of (active symbols x active subscriptions). For brand-new
-    # combos stamp "now" so the worker doesn't backfire an old signal.
+    # cross product of (active symbols x active subscriptions), MINUS any
+    # (symbol, strategy) pair the user has excluded. Dropping excluded
+    # combos from last_seen means re-enabling later stamps a fresh "now"
+    # instead of back-firing every signal accumulated while it was off.
     now = int(time.time())
     new_combos = {
         f"{sym}::{s.strategy_id}"
         for sym in cfg.symbols
         for s in payload.subscriptions
+        if sym not in s.excluded
     }
     old_keys = set(cfg.last_seen)
     for k in new_combos - old_keys:

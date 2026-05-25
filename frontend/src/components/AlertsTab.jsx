@@ -58,14 +58,32 @@ function AlertsTab({ strategies, snapshot }) {
     if (subIds.has(id)) {
       setSubs(subs.filter(s => s.strategy_id !== id))
     } else {
-      setSubs([...subs, { strategy_id: id, interval: null }])
+      setSubs([...subs, { strategy_id: id, interval: null, excluded: [] }])
     }
   }
 
   const subAll = () => {
-    setSubs(strategies.map(s => ({ strategy_id: s.id, interval: null })))
+    setSubs(strategies.map(s => ({ strategy_id: s.id, interval: null, excluded: [] })))
   }
   const subNone = () => setSubs([])
+
+  // Per-(strategy, symbol) opt-out: empty excluded = fires everywhere.
+  // Clicking a coin chip flips its membership in that strategy's list.
+  const isExcluded = (sid, sym) => {
+    const sub = subs.find(s => s.strategy_id === sid)
+    return (sub?.excluded || []).includes(sym)
+  }
+
+  const toggleExclusion = (sid, sym) => {
+    setSubs(subs.map(s => {
+      if (s.strategy_id !== sid) return s
+      const ex = s.excluded || []
+      return {
+        ...s,
+        excluded: ex.includes(sym) ? ex.filter(x => x !== sym) : [...ex, sym],
+      }
+    }))
+  }
 
   const save = async () => {
     setSaving(true)
@@ -338,12 +356,46 @@ function AlertsTab({ strategies, snapshot }) {
           </button>
         </div>
         <div className="alerts-subs-list">
-          {strategies.map(s => (
-            <label key={s.id} className={`alerts-sub-row ${subIds.has(s.id) ? 'on' : ''}`}>
-              <input type="checkbox" checked={subIds.has(s.id)} onChange={() => toggle(s.id)} />
-              <span className="alerts-sub-name">{s.name}</span>
-            </label>
-          ))}
+          {strategies.map(s => {
+            const on = subIds.has(s.id)
+            const sub = subs.find(x => x.strategy_id === s.id)
+            const excludedCount = (sub?.excluded || []).length
+            return (
+              <div key={s.id} className={`alerts-sub-row ${on ? 'on' : ''}`}>
+                <label className="asr-head">
+                  <input type="checkbox" checked={on} onChange={() => toggle(s.id)} />
+                  <span className="alerts-sub-name">{s.name}</span>
+                  {on && excludedCount > 0 && (
+                    <span className="asr-excl-count muted small">
+                      −{excludedCount} coin{excludedCount === 1 ? '' : 's'}
+                    </span>
+                  )}
+                </label>
+                {on && watchSymbols.length > 0 && (
+                  <div className="asr-coins">
+                    <span className="asr-coins-label muted small">Coins:</span>
+                    {watchSymbols.map(sym => {
+                      const off = isExcluded(s.id, sym)
+                      const label = sym.endsWith('USDT') ? sym.slice(0, -4) : sym
+                      return (
+                        <button
+                          key={sym}
+                          type="button"
+                          className={`asr-coin ${off ? 'off' : 'on'}`}
+                          onClick={() => toggleExclusion(s.id, sym)}
+                          title={off
+                            ? `Click to enable ${s.name} on ${sym}`
+                            : `Click to silence ${s.name} on ${sym}`}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       </div>
 

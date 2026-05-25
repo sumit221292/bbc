@@ -53,6 +53,11 @@ _lock = asyncio.Lock()
 class Subscription(BaseModel):
     strategy_id: str
     interval: Optional[str] = None  # None = use strategy default
+    # Per-symbol opt-OUT list. Empty (default) = fires on every coin in
+    # cfg.symbols. Add a symbol here to silence this strategy on just that
+    # coin without dropping it from other coins. Symbols are stored
+    # upper-case to match cfg.symbols normalisation.
+    excluded: list[str] = Field(default_factory=list)
 
 
 class OpenPosition(BaseModel):
@@ -671,6 +676,13 @@ async def alert_loop():
                 # cluster together in chat -- easier for the reader.
                 for symbol in watch_symbols:
                     for sub in cfg.subscriptions:
+                        # Per-coin opt-out: user can silence a specific
+                        # (strategy, coin) without dropping the whole
+                        # subscription. The global resolve pass still
+                        # closes any DB-tracked OPEN trade for the pair
+                        # so existing positions are never orphaned.
+                        if symbol in sub.excluded:
+                            continue
                         key = _state_key(symbol, sub.strategy_id)
                         try:
                             latest, all_signals, name, interval, entry_candles = \
