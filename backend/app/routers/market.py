@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any
 
@@ -17,6 +18,18 @@ router = APIRouter(prefix="/api/market", tags=["market"])
 _PAIRS_CACHE: dict[str, Any] = {"data": None, "ts": 0.0}
 _PAIRS_TTL = 3600.0   # 1 hour
 
+# Hard floor on last price for inclusion in the picker / search results.
+# Sub-$1 coins (DOGE 0.10579, PEPE 0.0000123, SHIB 0.00000789) have tick
+# sizes that wreck Confluence's median entry/stop/target maths -- a 1
+# tick slip on PEPE is a multi-percent move, so the strategy's RR floor
+# silently collapses on real fills. The user asked for $1+ only.
+SYMBOL_MIN_PRICE = float(os.environ.get("SYMBOL_MIN_PRICE", "1.0"))
+
+# Stablecoins (USDC/BUSD/etc) trade at ~$1 so they pass the price gate
+# but have no useful directional movement to trade. Filter them out at
+# the source.
+_STABLE_BASES = {"USDC", "BUSD", "TUSD", "FDUSD", "USDP", "DAI", "USDS", "PYUSD"}
+
 
 async def _get_usdt_pairs() -> list[dict[str, Any]]:
     now = time.time()
@@ -26,18 +39,24 @@ async def _get_usdt_pairs() -> list[dict[str, Any]]:
         info = (await client.get(f"{settings.binance_rest}/api/v3/exchangeInfo")).json()
         tickers_raw = (await client.get(f"{settings.binance_rest}/api/v3/ticker/24hr")).json()
     vol_by_sym = {t["symbol"]: float(t.get("quoteVolume", 0) or 0) for t in tickers_raw}
+    price_by_sym = {t["symbol"]: float(t.get("lastPrice", 0) or 0) for t in tickers_raw}
     pairs: list[dict[str, Any]] = []
     for s in info.get("symbols", []):
-        if (s.get("quoteAsset") == "USDT"
-                and s.get("status") == "TRADING"
-                and s.get("isSpotTradingAllowed", True)):
-            sym = s["symbol"]
-            pairs.append({
-                "symbol": sym,
-                "base": s["baseAsset"],
-                "label": f"{s['baseAsset']}/USDT",
-                "volume_24h": vol_by_sym.get(sym, 0.0),
-            })
+        if s.get("quoteAsset") != "USDT": continue
+        if s.get("status") != "TRADING": continue
+        if not s.get("isSpotTradingAllowed", True): continue
+        sym = s["symbol"]
+        # Sub-$1 floor: precision blows up trade execution at penny prices.
+        if price_by_sym.get(sym, 0.0) < SYMBOL_MIN_PRICE: continue
+        # Drop stablecoin-quoted-against-USDT pairs (USDC/USDT etc).
+        if s["baseAsset"] in _STABLE_BASES: continue
+        pairs.append({
+            "symbol": sym,
+            "base": s["baseAsset"],
+            "label": f"{s['baseAsset']}/USDT",
+            "volume_24h": vol_by_sym.get(sym, 0.0),
+            "price": price_by_sym.get(sym, 0.0),
+        })
     pairs.sort(key=lambda p: -p["volume_24h"])  # highest-volume first
     _PAIRS_CACHE["data"] = pairs
     _PAIRS_CACHE["ts"] = now

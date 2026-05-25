@@ -145,6 +145,37 @@ def init_db() -> None:
         )
         conn.commit()
 
+    # One-shot trade history wipe (May 2026). The user asked to start
+    # fresh after the sub-$1 dropdown filter shipped; without a clean
+    # slate the pre-filter PEPE/SHIB/DOGE trade rows would keep
+    # polluting the Trades tab and the chip-stat win-rates forever.
+    # A kv_store marker ensures this fires exactly once per deploy
+    # lineage -- subsequent restarts see the marker and become no-ops.
+    _maybe_one_shot_wipe()
+
+
+def _maybe_one_shot_wipe() -> None:
+    """Idempotent trade-history reset, gated by a kv marker. Re-bump the
+    marker name (append a new date) to fire another wipe in the future."""
+    import logging as _log
+    import time as _t
+    marker = "trades_wiped_2026_05_25"
+    log = _log.getLogger("btc")
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM kv_store WHERE key = ?", (marker,),
+        ).fetchone()
+        if row is not None:
+            return  # already wiped on a previous boot
+        cur = conn.execute("DELETE FROM trades")
+        n = cur.rowcount
+        conn.execute(
+            "INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+            (marker, json.dumps({"wiped": n, "at": int(_t.time())}), int(_t.time())),
+        )
+        conn.commit()
+        log.info("[trade_store] one-shot wipe fired: removed %d trade rows", n)
+
 
 # ---------- Key-value (singleton blobs) ----------
 
