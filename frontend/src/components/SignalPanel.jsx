@@ -272,17 +272,37 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
           )}
         </div>
         <ul>
-          {stored.trades.map(t => (
-            <li key={`${t.id}`}>
-              <span className={`badge sm ${t.type === 'BUY' ? 'buy' : 'sell'}`}>{t.type}</span>
-              <StatusBadge status={t.status} />
-              <span className="px">${fmt(t.entry)}</span>
-              {t.pnl_pct != null && t.status !== 'OPEN' && (
-                <span className={`pnl sm ${t.pnl_pct >= 0 ? 'pos' : 'neg'}`}>{pct(t.pnl_pct)}</span>
-              )}
-              <span className="muted small">{fmtIST(t.signal_time)}</span>
-            </li>
-          ))}
+          {stored.trades.map(t => {
+            const isOpen = t.status === 'OPEN'
+            return (
+              <li key={`${t.id}`}>
+                <div className="hist-top">
+                  <span className={`badge sm ${t.type === 'BUY' ? 'buy' : 'sell'}`}>{t.type}</span>
+                  <StatusBadge status={t.status} />
+                  <span className="hist-px">Entry <b>${fmt(t.entry)}</b></span>
+                  {!isOpen && t.exit_price != null && (
+                    <span className="hist-px">→ Exit <b>${fmt(t.exit_price)}</b></span>
+                  )}
+                  {t.pnl_pct != null && !isOpen && (
+                    <span className={`pnl sm ${t.pnl_pct >= 0 ? 'pos' : 'neg'}`}>{pct(t.pnl_pct)}</span>
+                  )}
+                </div>
+                <div className="hist-bot muted small">
+                  {/* Plan levels -- always present for worker-fired rows.
+                      For a LOSS the SL equals Exit above; for a WIN the
+                      TP equals Exit. Showing both makes the outcome
+                      obvious without the user needing to do the maths. */}
+                  {t.stop_loss != null && (
+                    <span className="hist-sl">SL <b>${fmt(t.stop_loss)}</b></span>
+                  )}
+                  {t.target != null && (
+                    <span className="hist-tp">· TP <b>${fmt(t.target)}</b></span>
+                  )}
+                  <span className="hist-time">· {fmtIST(t.signal_time)}</span>
+                </div>
+              </li>
+            )
+          })}
           {stored.trades.length === 0 && (
             <li className="muted">
               Abhi koi live trade save nahi hua — alert worker se naya signal aate hi yaha

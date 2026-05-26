@@ -463,10 +463,28 @@ body {
 .history .title { color: var(--muted); font-size: 12px; text-transform: uppercase; margin-bottom: 6px; }
 .history ul { list-style: none; padding: 0; margin: 0; }
 .history li {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; flex-direction: column; gap: 2px;
   padding: 6px 0; border-bottom: 1px solid var(--border);
 }
 .history .px { font-variant-numeric: tabular-nums; }
+.history .hist-top {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
+}
+.history .hist-top .hist-px {
+  font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.history .hist-top .hist-px b { color: var(--text); font-weight: 600; }
+.history .hist-bot {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+  padding-left: 2px;
+  font-size: 10px;
+}
+.history .hist-bot .hist-sl { color: var(--sell); opacity: 0.8; }
+.history .hist-bot .hist-tp { color: var(--buy); opacity: 0.8; }
+.history .hist-bot b { color: var(--text); font-weight: 600; }
+.history .hist-bot .hist-time { color: var(--muted); margin-left: auto; }
 
 /* ---------- Alerts (Telegram notifications) ---------- */
 .alerts-tab { font-size: 12px; }
