@@ -16,6 +16,9 @@ class ADXTrend(Strategy):
     id = "adx_trend"
     name = "ADX + DI Trend Entry"
     description = "Directional Indicator cross when ADX > 25 (strong trend)."
+    # Strong-trend filter -> backtest +0.39pp avg with trail. Trend
+    # confirmation by definition, so ratchet works.
+    supports_trail = True
 
     ADX_MIN = 25.0
 

@@ -7,6 +7,9 @@ class ScalpingRSI(Strategy):
     id = "scalping"
     name = "Scalping (RSI)"
     description = "Buy when RSI(14) crosses below 30, sell when it crosses above 70."
+    # Backtest +0.34pp avg with trail. RSI extremes that re-fire are
+    # usually genuine reversal continuation, ratchet locks gains.
+    supports_trail = True
 
     OVERSOLD = 30.0
     OVERBOUGHT = 70.0

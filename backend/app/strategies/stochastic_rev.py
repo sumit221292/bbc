@@ -14,6 +14,10 @@ class StochasticReversal(Strategy):
     id = "stochastic"
     name = "Stochastic Reversal"
     description = "%K crosses %D inside overbought/oversold zones."
+    # Reversion strategy that fires often -- the multi-fires happen to
+    # cluster on real reversals, so trail nets +0.73pp PnL across coins
+    # in backtest. Keep it on.
+    supports_trail = True
 
     OVERSOLD = 20.0
     OVERBOUGHT = 80.0

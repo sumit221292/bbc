@@ -20,6 +20,15 @@ class Strategy(ABC):
     # subscription does not explicitly set one. UI uses this to know which
     # DB partition (strategy_id, interval) holds the live trades.
     storage_interval: ClassVar[str] = "1h"
+    # Whether alert_loop should apply ratchet-trail on same-direction
+    # follow-up signals. Backtest across 250 (strategy, coin) pairs showed
+    # trend / momentum strategies (donchian, stochastic, adx_trend, etc.)
+    # gain from trail, while reversion strategies (price_action, MTF chop,
+    # day_trading) lose because their multi-fires usually reflect a slow
+    # grind against the trade rather than a confirmed continuation.
+    # Default OFF so a new strategy doesn't accidentally inherit the
+    # behaviour without data backing it. Trend strategies override to True.
+    supports_trail: ClassVar[bool] = False
 
     @classmethod
     def meta(cls) -> StrategyMeta:

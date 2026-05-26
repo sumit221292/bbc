@@ -23,7 +23,16 @@ def simulate(
     risk_pct: float = 0.02,
     fee_pct: float = 0.001,
     partial_at_r: float | None = None,
+    trail: bool = False,
 ) -> dict:
+    """Backtest simulator.
+
+    `trail=True` mirrors alert_loop's ratchet-trail behaviour: when a new
+    same-direction signal arrives while a trade is open, the existing
+    trade's SL and TP are pulled inward (BUY: up, SELL: down) -- never
+    widened. This lets the backtest reflect the live worker's actual
+    risk management after the cooldown was removed.
+    """
     sigs_by_time = {
         s.time: s for s in signals
         if s.entry is not None and s.stop_loss is not None and s.target is not None
@@ -70,15 +79,23 @@ def simulate(
             if t["type"] == "BUY":
                 if c.low <= t["stop"]:
                     exit_price = t["stop"]
-                    # If stop is at BE (i.e., partial already taken), call this WIN
-                    outcome = "WIN" if t["partial_done"] else "LOSS"
+                    # WIN if EITHER partial profit was taken (stop = BE)
+                    # OR the trail ratcheted the stop above the entry.
+                    # Otherwise it's a normal stop hit -> LOSS.
+                    if t["partial_done"] or exit_price > t["initial_entry"]:
+                        outcome = "WIN"
+                    else:
+                        outcome = "LOSS"
                 elif c.high >= t["target"]:
                     exit_price = t["target"]
                     outcome = "WIN"
             else:
                 if c.high >= t["stop"]:
                     exit_price = t["stop"]
-                    outcome = "WIN" if t["partial_done"] else "LOSS"
+                    if t["partial_done"] or exit_price < t["initial_entry"]:
+                        outcome = "WIN"
+                    else:
+                        outcome = "LOSS"
                 elif c.low <= t["target"]:
                     exit_price = t["target"]
                     outcome = "WIN"
@@ -97,24 +114,39 @@ def simulate(
                 })
                 open_trade = None
 
-        # New entry?
+        # New entry OR trail-update on existing open trade.
         sig = sigs_by_time.get(c.time)
-        if sig is not None and open_trade is None:
-            stop_dist = abs(sig.entry - sig.stop_loss)
-            if stop_dist <= 0:
-                continue
-            size = (cap * risk_pct) / stop_dist
-            open_trade = {
-                "type": sig.type,
-                "initial_entry": sig.entry,
-                "initial_stop": sig.stop_loss,
-                "stop": sig.stop_loss,
-                "target": sig.target,
-                "size": size,
-                "remaining_size": size,
-                "partial_done": False,
-                "partial_pnl": 0.0,
-            }
+        if sig is not None:
+            if open_trade is None:
+                stop_dist = abs(sig.entry - sig.stop_loss)
+                if stop_dist <= 0:
+                    continue
+                size = (cap * risk_pct) / stop_dist
+                open_trade = {
+                    "type": sig.type,
+                    "initial_entry": sig.entry,
+                    "initial_stop": sig.stop_loss,
+                    "stop": sig.stop_loss,
+                    "target": sig.target,
+                    "size": size,
+                    "remaining_size": size,
+                    "partial_done": False,
+                    "partial_pnl": 0.0,
+                }
+            elif trail and sig.type == open_trade["type"]:
+                # Ratchet-trail: same-direction signal pulls SL / TP
+                # inward only. Mirrors alert_loop's logic so backtest
+                # results match what the live worker would do.
+                if open_trade["type"] == "BUY":
+                    if sig.stop_loss > open_trade["stop"]:
+                        open_trade["stop"] = sig.stop_loss
+                    if sig.target > open_trade["target"]:
+                        open_trade["target"] = sig.target
+                else:  # SELL
+                    if sig.stop_loss < open_trade["stop"]:
+                        open_trade["stop"] = sig.stop_loss
+                    if sig.target < open_trade["target"]:
+                        open_trade["target"] = sig.target
 
     # Mark to market open trade at last close
     if open_trade is not None:

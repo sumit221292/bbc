@@ -15,6 +15,10 @@ class DonchianTurtle(Strategy):
     id = "donchian"
     name = "Donchian Breakout (Turtle)"
     description = "Buy on close above 20-bar high; sell on close below 20-bar low."
+    # Backtest across 20 coins showed donchian was the biggest trail
+    # beneficiary (+1.84pp avg PnL). Breakouts persist long enough that
+    # ratcheting the stop locks in real profit on follow-through bars.
+    supports_trail = True
 
     def evaluate(self, candles: list[Candle]) -> list[Signal]:
         if len(candles) < 30:

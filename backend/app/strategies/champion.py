@@ -29,6 +29,9 @@ class Champion(Strategy):
         "multi-confirmation in mild trends, BB+RSI reversion in chop. "
         "Best blend of the suite's working ideas. Designed for 1h or 4h."
     )
+    # Backtest +0.27pp with trail. Regime-adaptive nature means follow-up
+    # signals usually confirm the current regime; ratchet is safe.
+    supports_trail = True
 
     LOOKBACK = 20
     EMA_SHORT = 20

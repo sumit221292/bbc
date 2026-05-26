@@ -47,6 +47,21 @@ def _is_known_strategy(strategy_id: str) -> bool:
         return True
     except KeyError:
         return False
+
+
+def _strategy_supports_trail(strategy_id: str) -> bool:
+    """Whether ratchet-trail should fire for this strategy's same-direction
+    follow-up signals. Per-strategy flag because the 250-pair backtest
+    showed trend / momentum strategies (donchian, stochastic, adx_trend,
+    scalping, champion) gain from trail while reversion / chop strategies
+    (price_action, MTF chop, day_trading) lose. MTF strategies aren't
+    Strategy subclasses, so they default to False."""
+    if is_mtf(strategy_id) or is_smc_mtf(strategy_id):
+        return False
+    try:
+        return bool(getattr(get_strategy(strategy_id).__class__, "supports_trail", False))
+    except KeyError:
+        return False
 from .schemas import Signal
 from .trade_status import annotate
 from . import trade_store
@@ -819,20 +834,16 @@ async def alert_loop():
                                           and latest.stop_loss is not None
                                           and latest.target is not None)
 
-                            # === Ratchet-trail path ===
-                            # If a same-direction OPEN trade already exists
-                            # for this (strategy, interval, symbol), do NOT
-                            # open a duplicate. Instead ratchet the existing
-                            # trade's SL/TP in the protective direction:
-                            #   BUY  : SL only moves UP   (locks profit)
-                            #          TP only moves UP   (extends runway)
-                            #   SELL : SL only moves DOWN
-                            #          TP only moves DOWN
-                            # If neither SL nor TP improves, silently skip.
-                            # This replaces the old "cooldown" approach --
-                            # consecutive same-direction signals tighten the
-                            # plan instead of being suppressed.
-                            if has_levels:
+                            # === Ratchet-trail path (per-strategy) ===
+                            # Backtest showed trail nets +ve for trend /
+                            # momentum strategies but -ve for reversion /
+                            # chop strategies. Each Strategy class exposes
+                            # `supports_trail`; we honor it here so trail
+                            # only fires where the data backs it up. For
+                            # strategies without trail support, the original
+                            # insert path runs and the UNIQUE constraint
+                            # makes duplicate signal_times no-ops anyway.
+                            if has_levels and _strategy_supports_trail(sub.strategy_id):
                                 try:
                                     opens = trade_store.open_trades(
                                         sub.strategy_id, interval, symbol,
