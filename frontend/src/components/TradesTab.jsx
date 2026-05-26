@@ -6,7 +6,7 @@ import { fmtPrice as fmt, fmtPct as pct, timeAgo, fmtIST } from '../lib/format.j
 // the user pivot freely: "Strategy=Confluence, Coin=All" shows every
 // Confluence trade across coins; "Strategy=All, Coin=BTCUSDT" shows every
 // strategy that ever traded BTC. Hits /api/trades with optional filters.
-function TradesTab({ strategies = [] }) {
+function TradesTab({ strategies = [], onJumpToLive }) {
   const [strategyFilter, setStrategyFilter] = useState('')   // '' = All
   const [coinFilter, setCoinFilter] = useState('')           // '' = All
   // Min win-rate cutoff applied per (strategy, coin) combo. 0 = show all.
@@ -220,9 +220,17 @@ function TradesTab({ strategies = [] }) {
             : t.symbol
           const stratLabel = nameById[t.strategy_id] || t.strategy_id
           const when = t.created_at || t.signal_time
+          // Click jumps the user to the Live tab with the chart re-tuned
+          // to the same (strategy, coin, interval) as this trade.
+          const jump = () => onJumpToLive && onJumpToLive(t.strategy_id, t.symbol, t.interval)
           return (
             <div key={`${t.strategy_id}-${t.interval}-${t.symbol}-${t.signal_time}`}
-                 className={`trade-row ${tone}`}>
+                 className={`trade-row ${tone} clickable`}
+                 role="button"
+                 tabIndex={0}
+                 onClick={jump}
+                 onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') jump() }}
+                 title={`Open ${stratLabel} on ${t.symbol} (${t.interval}) in Live tab`}>
               <div className="tr-head">
                 <span className={`tr-side ${sideClass}`}>{t.type}</span>
                 <span className="tr-coin">{coinLabel}</span>
@@ -243,6 +251,22 @@ function TradesTab({ strategies = [] }) {
                 )}
                 <span className="muted" title={fmtIST(when)}>{timeAgo(when)}</span>
               </div>
+              {/* Original plan -- SL + TP. Shown for every status so the
+                  user can compare planned vs actual exit at a glance. The
+                  hit price (= SL for a LOSS, = TP for a WIN) is the same
+                  as Exit above; the two together make it obvious what
+                  happened without the user needing to know the convention. */}
+              {(t.stop_loss != null || t.target != null) && (
+                <div className="tr-plan muted">
+                  Plan:
+                  {t.stop_loss != null && (
+                    <>{' '}<span className="tr-sl">SL <b>${fmt(t.stop_loss)}</b></span></>
+                  )}
+                  {t.target != null && (
+                    <>{' · '}<span className="tr-tp">TP <b>${fmt(t.target)}</b></span></>
+                  )}
+                </div>
+              )}
             </div>
           )
         })}

@@ -213,6 +213,16 @@ export default function App() {
     setActiveTab('live')
   }, [setStrategyId, setActiveTab])
 
+  // Click on a trade row in TradesTab -> jump to Live with the matching
+  // (strategy, coin, interval) so the chart re-runs against the exact
+  // setup that produced that trade. Auto-coerces invalid intervals.
+  const handleJumpToLive = useCallback((sid, sym, intv) => {
+    if (sym) setSymbol(sym)
+    if (sid) setStrategyId(sid)
+    if (intv && ['1h', '4h', '1d'].includes(intv)) setInterval(intv)
+    setActiveTab('live')
+  }, [setSymbol, setStrategyId, setInterval, setActiveTab])
+
   const livePrice = useMemo(() => live?.close ?? null, [live])
 
   const tabs = [
@@ -312,7 +322,10 @@ export default function App() {
               />
             )}
             {activeTab === 'trades' && (
-              <TradesTab strategies={strategies} />
+              <TradesTab
+                strategies={strategies}
+                onJumpToLive={handleJumpToLive}
+              />
             )}
             {activeTab === 'best' && (
               <Leaderboard data={leaderboard} />

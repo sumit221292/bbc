@@ -736,10 +736,17 @@ body {
   padding: 6px 8px; background: var(--bg);
   border-radius: 4px; border-left: 3px solid transparent;
   font-size: 11px;
+  transition: background 0.1s, transform 0.05s;
 }
 .trade-row.win { border-left-color: var(--buy); background: rgba(38,166,154,0.06); }
 .trade-row.loss { border-left-color: var(--sell); background: rgba(239,83,80,0.06); }
 .trade-row.open { border-left-color: var(--accent); background: rgba(52,152,219,0.06); }
+.trade-row.clickable { cursor: pointer; }
+.trade-row.clickable:hover { filter: brightness(1.4); }
+.trade-row.clickable:active { transform: scale(0.99); }
+.trade-row.clickable:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
 
 .tr-head {
   display: flex; align-items: center; gap: 6px;
@@ -772,6 +779,15 @@ body {
 }
 .tr-meta .pos { color: var(--buy); font-weight: 600; }
 .tr-meta .neg { color: var(--sell); font-weight: 600; }
+
+.tr-plan {
+  margin-top: 2px;
+  font-size: 10px;
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+.tr-plan .tr-sl { color: var(--sell); opacity: 0.8; }
+.tr-plan .tr-tp { color: var(--buy); opacity: 0.8; }
+.tr-plan b { color: var(--text); font-weight: 600; }
 
 /* ---------- Auto-trade panel (DANGER ZONE) ---------- */
 .auto-trade {
