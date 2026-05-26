@@ -159,7 +159,13 @@ def _maybe_one_shot_wipe() -> None:
     marker name (append a new date) to fire another wipe in the future."""
     import logging as _log
     import time as _t
-    marker = "trades_wiped_2026_05_25"
+    # Bumped 2026-05-26: previous run accumulated corrupted rows because
+    # close_trade / update_trade_levels were missing the symbol filter,
+    # so every coin's trade at a given signal_time was closed with one
+    # coin's exit_price (LTC inheriting BTC's 76k price, etc.). After
+    # this commit fixes the SQL, the historical garbage must be wiped
+    # so the summaries don't keep showing 49,000%+ cumulative PnL.
+    marker = "trades_wiped_2026_05_26_crosscoin_bug"
     log = _log.getLogger("btc")
     with _lock, _connect() as conn:
         row = conn.execute(
@@ -254,6 +260,7 @@ def update_trade_levels(
     *,
     strategy_id: str,
     interval: str,
+    symbol: str,
     signal_time: int,
     stop_loss: float,
     target: float,
@@ -264,16 +271,20 @@ def update_trade_levels(
     TP up) instead of opening a duplicate position. Caller is
     responsible for enforcing the ratchet rule (never widen the stop).
     Returns True if a row was updated, False if the trade is already
-    closed or never existed."""
+    closed or never existed.
+
+    Filters by symbol for the same reason close_trade does -- 1h bar
+    close times collide across coins, so omitting symbol would trail
+    every coin's same-signal_time trade with one symbol's new levels."""
     with _lock, _connect() as conn:
         cur = conn.execute(
             """
             UPDATE trades
                SET stop_loss = ?, target = ?
-             WHERE strategy_id = ? AND interval = ? AND signal_time = ?
-               AND status = 'OPEN'
+             WHERE strategy_id = ? AND interval = ? AND symbol = ?
+               AND signal_time = ? AND status = 'OPEN'
             """,
-            (stop_loss, target, strategy_id, interval, signal_time),
+            (stop_loss, target, strategy_id, interval, symbol, signal_time),
         )
         conn.commit()
         return cur.rowcount > 0
@@ -283,13 +294,21 @@ def close_trade(
     *,
     strategy_id: str,
     interval: str,
+    symbol: str,
     signal_time: int,
     status: str,        # WIN or LOSS
     exit_price: float,
     exit_time: int,
     pnl_pct: float,
 ) -> bool:
-    """Flip an OPEN row to its final WIN/LOSS state. No-op if already closed."""
+    """Flip an OPEN row to its final WIN/LOSS state. No-op if already closed.
+
+    CRITICAL: must filter by symbol. 1h bar close times are identical
+    across coins, so without the symbol predicate one BTC trade closing
+    at signal_time=T also closes every other coin's OPEN trade at T --
+    inheriting BTC's exit_price + pnl_pct. That bug produced
+    +12,362% pnl_pct rows on LTC / XRP / ZEC when BTC stopped out, and
+    a +49,181% cumulative summary visible in the Trades tab."""
     if status not in ("WIN", "LOSS"):
         return False
     with _lock, _connect() as conn:
@@ -297,11 +316,11 @@ def close_trade(
             """
             UPDATE trades
                SET status = ?, exit_price = ?, exit_time = ?, pnl_pct = ?
-             WHERE strategy_id = ? AND interval = ? AND signal_time = ?
-               AND status = 'OPEN'
+             WHERE strategy_id = ? AND interval = ? AND symbol = ?
+               AND signal_time = ? AND status = 'OPEN'
             """,
             (status, exit_price, exit_time, pnl_pct,
-             strategy_id, interval, signal_time),
+             strategy_id, interval, symbol, signal_time),
         )
         conn.commit()
         return cur.rowcount > 0

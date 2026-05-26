@@ -702,6 +702,7 @@ async def _global_resolve_pass() -> int:
             ok = trade_store.close_trade(
                 strategy_id=r["strategy_id"],
                 interval=r["interval"],
+                symbol=r["symbol"],
                 signal_time=r["signal_time"],
                 status=resolved.status,
                 exit_price=float(exit_price) if exit_price is not None else 0.0,
@@ -778,6 +779,7 @@ async def alert_loop():
                                 )
                                 trade_store.close_trade(
                                     strategy_id=sub.strategy_id, interval=interval,
+                                    symbol=symbol,
                                     signal_time=row["signal_time"],
                                     status=resolved.status,
                                     exit_price=float(exit_price) if exit_price is not None else 0.0,
@@ -878,6 +880,7 @@ async def alert_loop():
                                         trade_store.update_trade_levels(
                                             strategy_id=sub.strategy_id,
                                             interval=interval,
+                                            symbol=symbol,
                                             signal_time=existing["signal_time"],
                                             stop_loss=new_sl, target=new_tp,
                                         )
