@@ -2,13 +2,19 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Which Binance market the app reads prices from: "spot" (default
-    # was) or "futures" (USDT-M perpetuals, what TradingView calls
-    # BTCUSDT.P). Defaults to "futures" because that's what users
-    # actually trade -- spot/futures prices diverge during volatility
-    # and the resulting SL/TP mismatch was the user's #1 complaint.
-    # Override with BINANCE_MARKET=spot to revert.
-    binance_market: str = "futures"
+    # Which Binance market the app reads prices from: "spot" or
+    # "futures" (USDT-M perpetuals, what TradingView calls BTCUSDT.P).
+    #
+    # Defaults to "spot" because Binance Futures (fapi.binance.com)
+    # geo-blocks cloud-host IPs that the Vision data mirror doesn't,
+    # so Railway / GCP / most PaaS hosts get HTTP 451 on direct
+    # fapi calls. To switch to Futures: deploy the Cloudflare Worker
+    # proxy in cloudflare-worker/ (free, runs on edge IPs Binance
+    # doesn't block), then on Railway set:
+    #   BINANCE_MARKET=futures
+    #   BINANCE_FUTURES_REST=https://<your-worker>.workers.dev
+    # Locally (from a non-blocked IP) just BINANCE_MARKET=futures works.
+    binance_market: str = "spot"
 
     # Spot endpoints. data-api.binance.vision is the data-only mirror
     # reachable from cloud-host IPs that geo-block api.binance.com (451).
