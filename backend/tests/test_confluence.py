@@ -179,9 +179,12 @@ def test_rr_floor_rejects_low_quality():
     print("    OK")
 
 
-def test_cooldown_prevents_back_to_back():
-    print("[7] Cooldown between confluence emits")
-    # Three voters all firing at bar T and again at bar T+1.
+def test_no_cooldown_emits_each_qualifying_bar():
+    print("[7] COOLDOWN_BARS=0 -- consecutive bars both emit (trail downstream)")
+    # Three voters all firing at bar T and again at bar T+1. With cooldown
+    # disabled, each qualifying bar fires; the worker's ratchet-trail path
+    # turns the T+1 emit into a SL/TP update on the existing OPEN trade
+    # instead of a duplicate position. Confluence itself should emit twice.
     bar_T = TIMES[50]
     bar_T1 = TIMES[51]
     voters = [
@@ -190,10 +193,14 @@ def test_cooldown_prevents_back_to_back():
         make_voter("c", [sig("BUY", bar_T), sig("BUY", bar_T1)]),
     ]
     out = run_confluence(voters)
-    # Should get only 1 emit -- COOLDOWN_BARS=4 swallows the T+1 attempt.
-    if len(out) != 1:
-        fail(f"expected 1 signal after cooldown, got {len(out)}: {out}")
-    print(f"    OK -- {len(out)} emit(s) honors cooldown")
+    # With cooldown=4 the old code emitted exactly 1. With cooldown=0 the
+    # sliding window keeps qualifying for every bar the votes stay inside
+    # VOTE_WINDOW_BARS, so we get >=2 emissions. The exact count depends
+    # on the window size + how many bars the votes span -- the point is
+    # only that suppression has lifted.
+    if len(out) < 2:
+        fail(f"expected >=2 signals (no cooldown), got {len(out)}: {out}")
+    print(f"    OK -- {len(out)} emits, downstream trails everything past the 1st")
 
 
 def main():
@@ -204,7 +211,7 @@ def main():
         test_majority_wins()
         test_window_clusters_adjacent_bars()
         test_rr_floor_rejects_low_quality()
-        test_cooldown_prevents_back_to_back()
+        test_no_cooldown_emits_each_qualifying_bar()
         print("\nALL 7 CONFLUENCE TESTS PASSED")
         return 0
     except AssertionError as e:

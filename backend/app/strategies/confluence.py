@@ -58,7 +58,14 @@ class Confluence(Strategy):
     )
 
     MIN_VOTES = 3       # at least this many voters must agree
-    COOLDOWN_BARS = 4   # avoid stacking signals on consecutive bars
+    # COOLDOWN_BARS was previously 4 to prevent stacking multiple
+    # parallel positions when consecutive bars qualified. That
+    # responsibility has moved into alert_loop's ratchet-trail path:
+    # same-direction emissions now trail an existing OPEN trade's
+    # SL/TP instead of opening a duplicate position. Setting cooldown
+    # to 0 lets Confluence emit every qualifying bar; the worker
+    # decides whether each emission opens a fresh trade or trails.
+    COOLDOWN_BARS = 0
     # Cluster voter signals that fire within this many bars of each other
     # into a single confluence event. Without this a Donchian BUY at bar T
     # and a SuperTrend BUY at bar T+1 would be treated as independent

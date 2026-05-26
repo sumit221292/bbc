@@ -250,6 +250,35 @@ def insert_trade(
         return cur.rowcount > 0
 
 
+def update_trade_levels(
+    *,
+    strategy_id: str,
+    interval: str,
+    signal_time: int,
+    stop_loss: float,
+    target: float,
+) -> bool:
+    """Move an OPEN trade's SL and TP to new values. Used by the
+    ratchet-trail path in alert_loop -- a same-direction signal at a
+    later bar shifts the existing trade's protection inward (BUY: SL up,
+    TP up) instead of opening a duplicate position. Caller is
+    responsible for enforcing the ratchet rule (never widen the stop).
+    Returns True if a row was updated, False if the trade is already
+    closed or never existed."""
+    with _lock, _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE trades
+               SET stop_loss = ?, target = ?
+             WHERE strategy_id = ? AND interval = ? AND signal_time = ?
+               AND status = 'OPEN'
+            """,
+            (stop_loss, target, strategy_id, interval, signal_time),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def close_trade(
     *,
     strategy_id: str,

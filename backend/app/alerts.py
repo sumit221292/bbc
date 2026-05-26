@@ -375,6 +375,34 @@ def _format_signal(symbol: str, name: str, sig) -> str:
     return "\n".join(parts)
 
 
+def _format_trail_update(
+    symbol: str, name: str, existing: dict,
+    new_sl: float, new_tp: float,
+    sl_moved: bool, tp_moved: bool,
+) -> str:
+    """Message sent when a same-direction signal trails an existing OPEN
+    trade's SL and/or TP. Either or both may have moved; we only mention
+    the ones that actually changed so the recipient sees concrete deltas."""
+    safe_name = name.replace("*", "").replace("_", "\\_")
+    side = existing["type"]
+    entry = existing["entry"]
+    old_sl = existing["stop_loss"]
+    old_tp = existing["target"]
+    parts = [
+        f"🔧 *TRAIL UPDATE* — `{symbol}` ({side} @ ${_fmt_price(entry)})",
+        f"*Strategy:* {safe_name}",
+    ]
+    if sl_moved:
+        # Direction arrow makes the lock-in obvious: 🔒↑ for BUY (SL moved
+        # higher = more profit locked), 🔒↓ for SELL (SL moved lower).
+        arrow = "↑" if new_sl > old_sl else "↓"
+        parts.append(f"*SL {arrow}:* `${_fmt_price(old_sl)}` → `${_fmt_price(new_sl)}` 🔒")
+    if tp_moved:
+        arrow = "↑" if new_tp > old_tp else "↓"
+        parts.append(f"*TP {arrow}:* `${_fmt_price(old_tp)}` → `${_fmt_price(new_tp)}` 📈")
+    return "\n".join(parts)
+
+
 def _format_closure(symbol: str, name: str, pending: PendingSignal, sig) -> str:
     """Message sent when a previously-notified open trade resolves."""
     safe_name = name.replace("*", "").replace("_", "\\_")
@@ -790,6 +818,82 @@ async def alert_loop():
                             has_levels = (latest.entry is not None
                                           and latest.stop_loss is not None
                                           and latest.target is not None)
+
+                            # === Ratchet-trail path ===
+                            # If a same-direction OPEN trade already exists
+                            # for this (strategy, interval, symbol), do NOT
+                            # open a duplicate. Instead ratchet the existing
+                            # trade's SL/TP in the protective direction:
+                            #   BUY  : SL only moves UP   (locks profit)
+                            #          TP only moves UP   (extends runway)
+                            #   SELL : SL only moves DOWN
+                            #          TP only moves DOWN
+                            # If neither SL nor TP improves, silently skip.
+                            # This replaces the old "cooldown" approach --
+                            # consecutive same-direction signals tighten the
+                            # plan instead of being suppressed.
+                            if has_levels:
+                                try:
+                                    opens = trade_store.open_trades(
+                                        sub.strategy_id, interval, symbol,
+                                    )
+                                except Exception:
+                                    opens = []
+                                same_dir = [r for r in opens if r["type"] == latest.type]
+                                if same_dir:
+                                    existing = same_dir[-1]  # most recent
+                                    old_sl = float(existing["stop_loss"])
+                                    old_tp = float(existing["target"])
+                                    new_sl = old_sl
+                                    new_tp = old_tp
+                                    sl_moved = False
+                                    tp_moved = False
+                                    if latest.type == "BUY":
+                                        if latest.stop_loss > old_sl:
+                                            new_sl = float(latest.stop_loss)
+                                            sl_moved = True
+                                        if latest.target > old_tp:
+                                            new_tp = float(latest.target)
+                                            tp_moved = True
+                                    else:  # SELL
+                                        if latest.stop_loss < old_sl:
+                                            new_sl = float(latest.stop_loss)
+                                            sl_moved = True
+                                        if latest.target < old_tp:
+                                            new_tp = float(latest.target)
+                                            tp_moved = True
+
+                                    if sl_moved or tp_moved:
+                                        trade_store.update_trade_levels(
+                                            strategy_id=sub.strategy_id,
+                                            interval=interval,
+                                            signal_time=existing["signal_time"],
+                                            stop_loss=new_sl, target=new_tp,
+                                        )
+                                        msg = _format_trail_update(
+                                            symbol, name, existing,
+                                            new_sl, new_tp, sl_moved, tp_moved,
+                                        )
+                                        ok_t, _ = await broadcast_telegram(
+                                            cfg.token, recipients, msg,
+                                        )
+                                        log.info(
+                                            "[TRAIL] %s/%s @ %s SL %s->%s TP %s->%s (tg=%s)",
+                                            symbol, sub.strategy_id,
+                                            existing["signal_time"],
+                                            old_sl, new_sl, old_tp, new_tp,
+                                            "ok" if ok_t else "fail",
+                                        )
+                                    else:
+                                        log.info(
+                                            "[TRAIL-SKIP] %s/%s no ratchet gain at %s",
+                                            symbol, sub.strategy_id, latest.time,
+                                        )
+                                    # Either way advance the cursor so this
+                                    # signal_time is not reprocessed next tick.
+                                    cfg.last_seen[key] = latest.time
+                                    changed = True
+                                    continue  # done -- skip the new-trade path
                             already_alerted = False
                             if has_levels:
                                 try:
