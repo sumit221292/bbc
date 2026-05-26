@@ -274,6 +274,15 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
         <ul>
           {stored.trades.map(t => {
             const isOpen = t.status === 'OPEN'
+            // Live mark-to-market for OPEN rows. The Recent Trades list
+            // is scoped to the current (strategy, symbol), so the
+            // chart's livePrice is the right price for every OPEN row
+            // here -- no per-symbol fetch needed.
+            const livePnl = (isOpen && livePrice && t.entry)
+              ? (t.type === 'BUY'
+                  ? (livePrice - t.entry) / t.entry * 100
+                  : (t.entry - livePrice) / t.entry * 100)
+              : null
             return (
               <li key={`${t.id}`}>
                 <div className="hist-top">
@@ -283,8 +292,17 @@ function SignalPanel({ result, livePrice, strategies = [], interval, symbol }) {
                   {!isOpen && t.exit_price != null && (
                     <span className="hist-px">→ Exit <b>${fmt(t.exit_price)}</b></span>
                   )}
+                  {isOpen && livePrice != null && (
+                    <span className="hist-px">Live <b>${fmt(livePrice)}</b></span>
+                  )}
                   {t.pnl_pct != null && !isOpen && (
                     <span className={`pnl sm ${t.pnl_pct >= 0 ? 'pos' : 'neg'}`}>{pct(t.pnl_pct)}</span>
+                  )}
+                  {isOpen && livePnl != null && (
+                    <span className={`pnl sm live ${livePnl >= 0 ? 'pos' : 'neg'}`}
+                          title="Mark-to-market: live price vs entry.">
+                      {pct(livePnl)} <small>live</small>
+                    </span>
                   )}
                 </div>
                 <div className="hist-bot muted small">

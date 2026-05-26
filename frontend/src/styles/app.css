@@ -409,6 +409,11 @@ body {
 .pnl.sm { font-size: 12px; margin-left: 0; }
 .pnl.pos { color: #00d4a3; }
 .pnl.neg { color: #ff4d4d; }
+.pnl.live { display: inline-flex; align-items: baseline; gap: 4px; }
+.pnl.live small {
+  font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
+  text-transform: uppercase; color: var(--accent); opacity: 0.85;
+}
 .reason { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
 
 .rr-strip {
@@ -797,6 +802,22 @@ body {
 }
 .tr-meta .pos { color: var(--buy); font-weight: 600; }
 .tr-meta .neg { color: var(--sell); font-weight: 600; }
+.tr-live-pnl {
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(52,152,219,0.15);
+}
+.tr-live-pnl.pos { color: var(--buy); }
+.tr-live-pnl.neg { color: var(--sell); }
+.tr-live-tag {
+  font-size: 8px; font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  margin-left: 4px;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
 
 .tr-plan {
   margin-top: 2px;

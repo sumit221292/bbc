@@ -18,6 +18,13 @@ router = APIRouter(prefix="/api/market", tags=["market"])
 _PAIRS_CACHE: dict[str, Any] = {"data": None, "ts": 0.0}
 _PAIRS_TTL = 3600.0   # 1 hour
 
+# Live-price cache for the live-PnL UI under TradesTab. /ticker/price is
+# a single ~80KB request that lists every symbol with no extra data, so
+# we hit it once every 10s and serve every concurrent caller from the
+# cached dict.
+_PRICES_CACHE: dict[str, Any] = {"data": None, "ts": 0.0}
+_PRICES_TTL = 10.0
+
 # Hard floor on last price for inclusion in the picker / search results.
 # Sub-$1 coins (DOGE 0.10579, PEPE 0.0000123, SHIB 0.00000789) have tick
 # sizes that wreck Confluence's median entry/stop/target maths -- a 1
@@ -61,6 +68,39 @@ async def _get_usdt_pairs() -> list[dict[str, Any]]:
     _PAIRS_CACHE["data"] = pairs
     _PAIRS_CACHE["ts"] = now
     return pairs
+
+
+async def _get_all_prices() -> dict[str, float]:
+    """Cached snapshot of every Binance symbol's last trade price."""
+    now = time.time()
+    cached = _PRICES_CACHE["data"]
+    if cached is not None and now - _PRICES_CACHE["ts"] < _PRICES_TTL:
+        return cached
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{settings.binance_rest}/api/v3/ticker/price")
+        r.raise_for_status()
+        data = r.json()
+    prices = {t["symbol"]: float(t["price"]) for t in data}
+    _PRICES_CACHE["data"] = prices
+    _PRICES_CACHE["ts"] = now
+    return prices
+
+
+@router.get("/prices")
+async def get_prices(
+    symbols: str = Query("", description="Comma-separated symbol list; empty returns every USDT pair."),
+):
+    """Latest trade prices for live-PnL UI. Cached 10s -- well within
+    Binance limits and fresh enough to feel real-time on the TradesTab
+    OPEN rows."""
+    try:
+        all_prices = await _get_all_prices()
+    except Exception as e:
+        raise HTTPException(502, f"Binance error: {e}")
+    if not symbols:
+        return {"prices": all_prices}
+    wanted = {s.strip().upper() for s in symbols.split(",") if s.strip()}
+    return {"prices": {s: all_prices[s] for s in wanted if s in all_prices}}
 
 
 @router.get("/symbols/search")

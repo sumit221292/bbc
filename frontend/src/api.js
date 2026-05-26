@@ -117,6 +117,16 @@ export async function getTradeStatsByPair() {
   return r.json()
 }
 
+// Live trade prices for the OPEN-row PnL badge. Pass an array of
+// symbols to keep the response small; omit to get every USDT pair.
+// Backend caches 10s so polling every 15s costs Binance ~0 weight.
+export async function getLivePrices(symbols = []) {
+  const qs = symbols.length ? `?symbols=${symbols.join(',')}` : ''
+  const r = await fetch(`${BASE}/api/market/prices${qs}`)
+  if (!r.ok) throw new Error(`prices: ${r.status}`)
+  return r.json()
+}
+
 export async function searchSymbols({ q = '', limit = 20 } = {}) {
   const params = new URLSearchParams()
   if (q) params.set('q', q)

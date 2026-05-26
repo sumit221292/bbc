@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { getTrades, getTradeStatsByPair } from '../api.js'
+import { getLivePrices, getTrades, getTradeStatsByPair } from '../api.js'
 import { fmtPrice as fmt, fmtPct as pct, timeAgo, fmtIST } from '../lib/format.js'
 
 // Cross-coin / cross-strategy trade browser. Two dropdowns at the top let
@@ -16,6 +16,10 @@ function TradesTab({ strategies = [], onJumpToLive }) {
   const [data, setData] = useState({ trades: [], summary: null })
   const [pairs, setPairs] = useState([])
   const [loading, setLoading] = useState(true)
+  // Live prices keyed by symbol. Powers the mark-to-market PnL badge on
+  // every OPEN row. Refreshed every 15s in lockstep with the backend's
+  // 10s cache TTL on /api/market/prices.
+  const [livePrices, setLivePrices] = useState({})
 
   // Pull stats-by-pair once to enumerate which coins actually appear in
   // the trade history. Better than listing the user's watchlist because
@@ -48,6 +52,36 @@ function TradesTab({ strategies = [], onJumpToLive }) {
     const id = setInterval(fetchOnce, 30000)
     return () => { cancelled = true; clearInterval(id) }
   }, [strategyFilter, coinFilter])
+
+  // Symbols with at least one currently OPEN trade in the visible list.
+  // These are the only coins we need live prices for.
+  const openSymbols = useMemo(() => {
+    const set = new Set()
+    for (const t of data.trades || []) {
+      if (t.status === 'OPEN' && t.symbol) set.add(t.symbol)
+    }
+    return Array.from(set)
+  }, [data.trades])
+
+  // Poll live prices every 15s for the OPEN-trade coins. Re-fires
+  // whenever the visible OPEN set changes (e.g. user picks a different
+  // filter, or a trade resolves and disappears from OPEN).
+  useEffect(() => {
+    if (openSymbols.length === 0) {
+      setLivePrices({})
+      return
+    }
+    let cancelled = false
+    const fetchOnce = async () => {
+      try {
+        const d = await getLivePrices(openSymbols)
+        if (!cancelled) setLivePrices(d.prices || {})
+      } catch { /* offline ok */ }
+    }
+    fetchOnce()
+    const id = setInterval(fetchOnce, 15000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [openSymbols.join('|')])  // re-run on actual symbol-set change
 
   // Distinct coins from the historical stats — sorted alphabetically.
   const allCoins = useMemo(() => {
@@ -239,18 +273,43 @@ function TradesTab({ strategies = [], onJumpToLive }) {
                   {isOpen ? 'CHAL RAHA' : status}
                 </span>
               </div>
-              <div className="tr-meta">
-                <span>Entry <b>${fmt(t.entry)}</b></span>
-                {!isOpen && t.exit_price && (
-                  <span>Exit <b>${fmt(t.exit_price)}</b></span>
-                )}
-                {!isOpen && pnl !== null && pnl !== undefined && (
-                  <span className={pnl >= 0 ? 'pos' : 'neg'}>
-                    {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}%
-                  </span>
-                )}
-                <span className="muted" title={fmtIST(when)}>{timeAgo(when)}</span>
-              </div>
+              {/* Live mark-to-market for OPEN rows: snapshot price from
+                  /api/market/prices, compute against entry per the trade
+                  direction. Worker may not have resolved the trade yet
+                  even if price crossed SL/TP -- the OPEN status is the
+                  source of truth, the live PnL is just a preview. */}
+              {(() => {
+                const livePx = isOpen ? livePrices[t.symbol] : null
+                const livePnl = (livePx != null && t.entry)
+                  ? (t.type === 'BUY'
+                      ? (livePx - t.entry) / t.entry * 100
+                      : (t.entry - livePx) / t.entry * 100)
+                  : null
+                return (
+                  <div className="tr-meta">
+                    <span>Entry <b>${fmt(t.entry)}</b></span>
+                    {!isOpen && t.exit_price && (
+                      <span>Exit <b>${fmt(t.exit_price)}</b></span>
+                    )}
+                    {isOpen && livePx != null && (
+                      <span>Live <b>${fmt(livePx)}</b></span>
+                    )}
+                    {!isOpen && pnl != null && (
+                      <span className={pnl >= 0 ? 'pos' : 'neg'}>
+                        {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}%
+                      </span>
+                    )}
+                    {isOpen && livePnl != null && (
+                      <span className={`tr-live-pnl ${livePnl >= 0 ? 'pos' : 'neg'}`}
+                            title="Mark-to-market: live price vs entry. Refreshes every 15s.">
+                        {livePnl >= 0 ? '+' : ''}{livePnl.toFixed(2)}%
+                        <span className="tr-live-tag">live</span>
+                      </span>
+                    )}
+                    <span className="muted" title={fmtIST(when)}>{timeAgo(when)}</span>
+                  </div>
+                )
+              })()}
               {/* Original plan -- SL + TP. Shown for every status so the
                   user can compare planned vs actual exit at a glance. The
                   hit price (= SL for a LOSS, = TP for a WIN) is the same
