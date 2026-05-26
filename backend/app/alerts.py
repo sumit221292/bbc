@@ -34,6 +34,19 @@ from .strategies import (
     get_strategy, is_mtf, is_smc_mtf, list_mtf_metas, list_strategies,
     run_mtf, run_smc_mtf,
 )
+
+
+def _is_known_strategy(strategy_id: str) -> bool:
+    """True iff the id maps to either a single-TF or MTF strategy that
+    actually exists in code right now. Used to prune zombie subscriptions
+    left over after a strategy is removed from the registry."""
+    if is_mtf(strategy_id) or is_smc_mtf(strategy_id):
+        return True
+    try:
+        get_strategy(strategy_id)
+        return True
+    except KeyError:
+        return False
 from .schemas import Signal
 from .trade_status import annotate
 from . import trade_store
@@ -180,6 +193,16 @@ def _migrate_legacy(cfg: AlertConfig) -> AlertConfig:
         cfg.pending_close = {
             _state_key(cfg.symbol, sid): ps for sid, ps in cfg.pending_close.items()
         }
+
+    # Drop subscriptions whose strategy_id no longer exists in code (e.g.
+    # smc_trend_liq after the May 2026 cleanup). The worker would skip
+    # them with a KeyError warning anyway, but a stale entry sits in
+    # state forever and the UI can't render a checkbox to un-tick it.
+    before = len(cfg.subscriptions)
+    cfg.subscriptions = [s for s in cfg.subscriptions if _is_known_strategy(s.strategy_id)]
+    dropped = before - len(cfg.subscriptions)
+    if dropped:
+        log.info("dropped %d zombie subscription(s) from saved config", dropped)
     return cfg
 
 

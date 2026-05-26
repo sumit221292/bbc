@@ -6,7 +6,8 @@ from pydantic import BaseModel
 
 from ..alerts import (
     AlertConfig, AutoTradeConfig, CONFIRM_PHRASE, MAX_RISK_PCT,
-    OpenPosition, Subscription, load_config, save_config, send_telegram,
+    OpenPosition, Subscription, _is_known_strategy, load_config,
+    save_config, send_telegram,
 )
 from ..binance_trade import cancel_all_open_orders, test_credentials
 
@@ -138,6 +139,14 @@ async def update_alerts_config(payload: ConfigUpdate):
     has_chat = bool(payload.chat_id or cleaned)
     has_full = bool(cfg.token and has_chat and payload.subscriptions)
     cfg.enabled = payload.enabled if not has_full else True
+
+    # Drop any subscription whose strategy_id is no longer registered.
+    # Defense-in-depth alongside load_config's prune -- if a client sends
+    # a stale id (e.g. a saved tab from before the cleanup), we don't
+    # let it bleed back into storage.
+    payload.subscriptions = [
+        s for s in payload.subscriptions if _is_known_strategy(s.strategy_id)
+    ]
 
     # Normalise each subscription's exclusion list: upper-case to match
     # cfg.symbols, drop blanks + dupes. Done in-place on the payload so
