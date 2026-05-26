@@ -117,6 +117,15 @@ export async function getTradeStatsByPair() {
   return r.json()
 }
 
+// Which Binance market the backend is currently reading from (spot /
+// futures). Drives the header badge so the user knows which price
+// feed they're looking at.
+export async function getMarketInfo() {
+  const r = await fetch(`${BASE}/api/market/info`)
+  if (!r.ok) throw new Error(`market/info: ${r.status}`)
+  return r.json()
+}
+
 // Live trade prices for the OPEN-row PnL badge. Pass an array of
 // symbols to keep the response small; omit to get every USDT pair.
 // Backend caches 10s so polling every 15s costs Binance ~0 weight.

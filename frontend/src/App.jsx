@@ -11,7 +11,7 @@ import Leaderboard from './components/Leaderboard.jsx'
 import AlertsTab from './components/AlertsTab.jsx'
 import TradesTab from './components/TradesTab.jsx'
 import Resizer from './components/Resizer.jsx'
-import { getIndicators, getKlines, getLeaderboard, getOutlook, getStrategies, getStrategySnapshot, runStrategy } from './api.js'
+import { getIndicators, getKlines, getLeaderboard, getMarketInfo, getOutlook, getStrategies, getStrategySnapshot, runStrategy } from './api.js'
 import { useLiveKlines } from './hooks/useLiveKlines.js'
 import { usePersistedState } from './hooks/usePersistedState.js'
 
@@ -23,6 +23,9 @@ export default function App() {
   const [interval, setInterval] = usePersistedState('btc.interval', '1h')
 
   const [strategies, setStrategies] = useState([])
+  // Backend's market mode (spot / futures) so the header can advertise
+  // which price feed the user is looking at. Fetched once on mount.
+  const [marketInfo, setMarketInfo] = useState(null)
   const [strategyId, setStrategyId] = usePersistedState('btc.strategy', 'mtf_chop_aware')
   const [strategyResult, setStrategyResult] = useState(null)
   const [outlook, setOutlook] = useState(null)
@@ -47,6 +50,14 @@ export default function App() {
   // Strategy list — fetched once.
   useEffect(() => {
     getStrategies().then(setStrategies).catch(e => setError(String(e)))
+  }, [])
+
+  // Market mode (spot / futures) — fetched once. Tells the user via a
+  // header badge whether prices come from Binance Spot or USDT-M Futures
+  // (BTCUSDT.P on TradingView). Critical so they don't try to execute
+  // a Spot signal on a Futures account at a slightly different price.
+  useEffect(() => {
+    getMarketInfo().then(setMarketInfo).catch(() => { /* offline ok */ })
   }, [])
 
   // The app is restricted to 1h / 4h / 1d. Sanitise persisted localStorage
@@ -245,6 +256,12 @@ export default function App() {
           </div>
         </div>
         <div className="live-price-wrap">
+          {marketInfo && (
+            <div className={`market-badge ${marketInfo.market}`}
+                 title={`Data source: ${marketInfo.rest}${marketInfo.api_prefix}. Set BINANCE_MARKET env var to switch.`}>
+              {marketInfo.market === 'futures' ? '⚡ FUTURES (USDT-M)' : '🏦 SPOT'}
+            </div>
+          )}
           <div className="live-price-label">Live Price</div>
           <div className="live-price">
             {livePrice ? `$${fmtPrice(livePrice)}` : '—'}

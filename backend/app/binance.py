@@ -30,7 +30,10 @@ def _kline_to_candle(k: list) -> Candle:
 
 
 async def fetch_klines(symbol: str, interval: str, limit: int = 500) -> list[Candle]:
-    url = f"{settings.binance_rest}/api/v3/klines"
+    # market_rest + market_api_prefix swap between Spot's /api/v3 and
+    # Futures' /fapi/v1 based on the BINANCE_MARKET env var. Response
+    # shape is identical across both -- only the source diverges.
+    url = f"{settings.market_rest}{settings.market_api_prefix}/klines"
     params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(url, params=params)
@@ -45,7 +48,7 @@ async def fetch_klines_paginated(symbol: str, interval: str, total_bars: int) ->
     `endTime` parameter until we have enough history. Returns chronological
     (oldest -> newest) without duplicates.
     """
-    url = f"{settings.binance_rest}/api/v3/klines"
+    url = f"{settings.market_rest}{settings.market_api_prefix}/klines"
     all_candles: list[Candle] = []
     end_time_ms: int | None = None
 
@@ -81,7 +84,7 @@ async def stream_klines(symbol: str, interval: str) -> AsyncIterator[Candle]:
     whether to treat them as updates or appends by comparing the time field.
     """
     stream = f"{symbol.lower()}@kline_{interval}"
-    url = f"{settings.binance_ws}/{stream}"
+    url = f"{settings.market_ws}/{stream}"
     async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
         async for raw in ws:
             msg = json.loads(raw)

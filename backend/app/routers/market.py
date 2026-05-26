@@ -42,16 +42,23 @@ async def _get_usdt_pairs() -> list[dict[str, Any]]:
     now = time.time()
     if _PAIRS_CACHE["data"] is not None and now - _PAIRS_CACHE["ts"] < _PAIRS_TTL:
         return _PAIRS_CACHE["data"]
+    base = f"{settings.market_rest}{settings.market_api_prefix}"
     async with httpx.AsyncClient(timeout=15.0) as client:
-        info = (await client.get(f"{settings.binance_rest}/api/v3/exchangeInfo")).json()
-        tickers_raw = (await client.get(f"{settings.binance_rest}/api/v3/ticker/24hr")).json()
+        info = (await client.get(f"{base}/exchangeInfo")).json()
+        tickers_raw = (await client.get(f"{base}/ticker/24hr")).json()
     vol_by_sym = {t["symbol"]: float(t.get("quoteVolume", 0) or 0) for t in tickers_raw}
     price_by_sym = {t["symbol"]: float(t.get("lastPrice", 0) or 0) for t in tickers_raw}
     pairs: list[dict[str, Any]] = []
     for s in info.get("symbols", []):
         if s.get("quoteAsset") != "USDT": continue
         if s.get("status") != "TRADING": continue
-        if not s.get("isSpotTradingAllowed", True): continue
+        # Spot has isSpotTradingAllowed; Futures has contractType.
+        # Filter perpetuals only on the Futures side -- skip dated
+        # delivery contracts like BTCUSDT_240927.
+        if settings.is_futures:
+            if s.get("contractType") != "PERPETUAL": continue
+        else:
+            if not s.get("isSpotTradingAllowed", True): continue
         sym = s["symbol"]
         # Sub-$1 floor: precision blows up trade execution at penny prices.
         if price_by_sym.get(sym, 0.0) < SYMBOL_MIN_PRICE: continue
@@ -71,19 +78,34 @@ async def _get_usdt_pairs() -> list[dict[str, Any]]:
 
 
 async def _get_all_prices() -> dict[str, float]:
-    """Cached snapshot of every Binance symbol's last trade price."""
+    """Cached snapshot of every Binance symbol's last trade price.
+    Hits the same market endpoint as the rest of the data layer so the
+    UI's live PnL matches what the user sees on Binance Futures."""
     now = time.time()
     cached = _PRICES_CACHE["data"]
     if cached is not None and now - _PRICES_CACHE["ts"] < _PRICES_TTL:
         return cached
+    url = f"{settings.market_rest}{settings.market_api_prefix}/ticker/price"
     async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(f"{settings.binance_rest}/api/v3/ticker/price")
+        r = await client.get(url)
         r.raise_for_status()
         data = r.json()
     prices = {t["symbol"]: float(t["price"]) for t in data}
     _PRICES_CACHE["data"] = prices
     _PRICES_CACHE["ts"] = now
     return prices
+
+
+@router.get("/info")
+async def market_info():
+    """Which Binance market the app is reading from. Frontend uses this
+    to render a "FUTURES" / "SPOT" badge so the user knows which set of
+    prices they're looking at."""
+    return {
+        "market": "futures" if settings.is_futures else "spot",
+        "rest": settings.market_rest,
+        "api_prefix": settings.market_api_prefix,
+    }
 
 
 @router.get("/prices")
