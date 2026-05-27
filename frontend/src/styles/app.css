@@ -744,6 +744,26 @@ body {
   cursor: pointer;
 }
 .trades-clear:hover { color: var(--sell); border-color: var(--sell); }
+.trades-dedupe {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 8px; font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; user-select: none;
+}
+.trades-dedupe input { cursor: pointer; }
+.trades-dedupe:hover { border-color: var(--accent); }
+.trades-dupe-hint {
+  padding: 6px 8px;
+  background: rgba(243,156,18,0.08);
+  border-left: 3px solid #f39c12;
+  border-radius: 4px;
+  line-height: 1.4;
+}
+.trades-dupe-hint.ok {
+  background: rgba(38,166,154,0.08);
+  border-left-color: var(--buy);
+}
 
 .trades-summary {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;

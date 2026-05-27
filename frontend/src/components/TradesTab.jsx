@@ -13,6 +13,14 @@ function TradesTab({ strategies = [], onJumpToLive }) {
   // New combos (no closed trades yet) always pass through so insufficient
   // data isn't punished -- only proven losers get filtered out.
   const [minWR, setMinWR] = useState(0)
+  // Dedupe toggle: multiple correlated strategies (esp. the MTF cluster)
+  // often fire the IDENTICAL trade -- same coin, same direction, same
+  // signal_time. Each lands as a separate trade row so the cumulative
+  // PnL summary multiplies the impact by the number of strategies that
+  // happened to align. When ON, we collapse those to one representative
+  // per (symbol, type, signal_time) so the headline numbers reflect
+  // what one unified position would actually have returned.
+  const [dedupe, setDedupe] = useState(false)
   const [data, setData] = useState({ trades: [], summary: null })
   const [pairs, setPairs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -110,7 +118,7 @@ function TradesTab({ strategies = [], onJumpToLive }) {
   // visible row count stay in sync. Combos with 0 closed trades pass
   // through -- we don't want a single 0/1 to permanently hide a brand-new
   // pair before it has had time to prove itself.
-  const trades = useMemo(() => {
+  const wrFiltered = useMemo(() => {
     if (!minWR) return rawTrades
     return rawTrades.filter(t => {
       const p = pairsByKey[`${t.strategy_id}::${t.symbol}`]
@@ -119,14 +127,35 @@ function TradesTab({ strategies = [], onJumpToLive }) {
     })
   }, [rawTrades, minWR, pairsByKey])
 
-  // Hidden combo count -- shown as a small hint so the user knows the
-  // filter is doing something even when most trades pass through.
-  const hiddenCount = rawTrades.length - trades.length
+  // Always compute the dedupe count so the hint banner can offer the
+  // toggle when overlap exists, regardless of the toggle's own state.
+  const dedupedView = useMemo(() => {
+    const seen = new Map()  // "sym|type|signal_time" -> first matching trade
+    for (const t of wrFiltered) {
+      const k = `${t.symbol}|${t.type}|${t.signal_time}`
+      if (!seen.has(k)) seen.set(k, t)
+    }
+    return Array.from(seen.values())
+  }, [wrFiltered])
+
+  const dupCount = wrFiltered.length - dedupedView.length
+
+  // Final visible trade list depends on the dedupe toggle. The summary
+  // card + the row list both honor it so what the user sees in the
+  // headline always matches the rows below.
+  const trades = dedupe ? dedupedView : wrFiltered
+
+  // Combined hidden-count for the WR-filter hint stays based on raw
+  // input so the banner reports what the filter dropped, not what
+  // dedupe collapsed.
+  const hiddenCount = rawTrades.length - wrFiltered.length
 
   // Re-roll the summary from the FILTERED list so the totals match what
-  // the user actually sees. Backend's summary was computed pre-filter.
+  // the user actually sees. Backend's summary was computed pre-filter
+  // and doesn't know about dedupe at all, so we recompute when either
+  // WR filter OR dedupe toggle is active.
   const summary = useMemo(() => {
-    if (!minWR) return data.summary
+    if (!minWR && !dedupe) return data.summary
     const wins = trades.filter(t => t.status === 'WIN').length
     const losses = trades.filter(t => t.status === 'LOSS').length
     const open = trades.filter(t => t.status === 'OPEN').length
@@ -140,7 +169,7 @@ function TradesTab({ strategies = [], onJumpToLive }) {
       total_pnl_pct,
       avg_pnl_pct: closed > 0 ? total_pnl_pct / closed : 0,
     }
-  }, [data.summary, trades, minWR])
+  }, [data.summary, trades, minWR, dedupe])
 
   return (
     <div className="trades-tab">
@@ -183,14 +212,39 @@ function TradesTab({ strategies = [], onJumpToLive }) {
             <option value={60}>≥ 60%</option>
           </select>
         </label>
-        {(strategyFilter || coinFilter || minWR > 0) && (
+        <label className="trades-dedupe" title="Multiple correlated strategies (esp. the MTF cluster) often fire the same trade. Toggle this to collapse duplicates by (symbol, direction, bar) so the summary reflects what one unified position would have returned.">
+          <input
+            type="checkbox"
+            checked={dedupe}
+            onChange={e => setDedupe(e.target.checked)}
+          />
+          <span>Dedupe</span>
+        </label>
+        {(strategyFilter || coinFilter || minWR > 0 || dedupe) && (
           <button
             className="trades-clear"
-            onClick={() => { setStrategyFilter(''); setCoinFilter(''); setMinWR(0) }}
+            onClick={() => {
+              setStrategyFilter(''); setCoinFilter(''); setMinWR(0); setDedupe(false)
+            }}
             title="Reset filters"
           >× Clear</button>
         )}
       </div>
+
+      {dupCount > 0 && !dedupe && (
+        <div className="trades-dupe-hint muted small">
+          📊 {dupCount} duplicate trade{dupCount === 1 ? '' : 's'} detected
+          — same (coin, direction, bar) fired by multiple strategies.
+          The cumulative PnL below counts each duplicate separately.
+          Toggle <b>Dedupe</b> above to see what one unified position would have returned.
+        </div>
+      )}
+      {dupCount > 0 && dedupe && (
+        <div className="trades-dupe-hint muted small ok">
+          ✅ Showing <b>{dedupedView.length}</b> unique events
+          (collapsed {dupCount} duplicate strategy-fire{dupCount === 1 ? '' : 's'}).
+        </div>
+      )}
 
       {summary && (
         <div className="trades-summary">
