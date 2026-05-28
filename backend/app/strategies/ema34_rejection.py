@@ -62,10 +62,13 @@ class EMA34Rejection(Strategy):
         "swing extreme ± 1.5×ATR, TP at 1:3 RR."
     )
     storage_interval = "1h"
-    # Trail-update gated per-strategy via supports_trail. Pullback/rejection
-    # is a CONTINUATION pattern -- follow-up signals on the same trend
-    # usually confirm and tightening the stop is appropriate.
-    supports_trail = True
+    # Trail-update was assumed True (continuation pattern), but the 18-coin
+    # 1y backtest came back at -5.71pp avg delta when trail is on -- the
+    # 24.8% WR means same-direction re-fires usually reflect a slow grind
+    # against the trade rather than a real continuation, so the trail
+    # just extends losers. Flipping to False; revisit only if live data
+    # contradicts the backtest.
+    supports_trail = False
 
     def evaluate(self, candles: list[Candle]) -> list[Signal]:
         # Need at least 220 bars for the 200-EMA + a window of state.
