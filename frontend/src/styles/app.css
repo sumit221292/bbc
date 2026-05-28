@@ -863,6 +863,112 @@ body {
 .tr-plan .tr-tp { color: var(--buy); opacity: 0.8; }
 .tr-plan b { color: var(--text); font-weight: 600; }
 
+/* ---------- Matrix tab (strategy x coin heatmap) ---------- */
+.matrix-tab { display: flex; flex-direction: column; gap: 10px; }
+.matrix-filters {
+  display: flex; gap: 8px; align-items: end; flex-wrap: wrap;
+  padding: 8px; background: var(--panel-2);
+  border-radius: 6px;
+}
+.matrix-filters label {
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 110px;
+}
+.matrix-filters select {
+  padding: 5px 8px; font-size: 12px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer;
+}
+.matrix-stats { margin-left: auto; align-self: center; }
+
+.matrix-scroll { overflow-x: auto; max-width: 100%; }
+.matrix-table {
+  border-collapse: collapse;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.matrix-table th, .matrix-table td {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  text-align: center;
+  white-space: nowrap;
+}
+.matrix-table .m-corner {
+  position: sticky; left: 0; z-index: 2;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  min-width: 140px;
+}
+.matrix-table .m-row {
+  position: sticky; left: 0;
+  background: var(--panel-2);
+  font-weight: 600; text-align: left;
+  min-width: 140px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.matrix-table .m-col {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 600;
+  min-width: 56px;
+}
+.matrix-table .m-cell {
+  cursor: pointer;
+  color: #fff;
+  font-weight: 600;
+  transition: filter 0.1s;
+  min-width: 56px;
+}
+.matrix-table .m-cell:hover {
+  filter: brightness(1.3);
+  outline: 1px solid var(--accent);
+}
+.matrix-table .m-cell.empty {
+  color: var(--muted);
+  background: var(--bg);
+  cursor: default;
+}
+
+.matrix-leaderboards {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  margin-top: 8px;
+}
+.m-lb {
+  background: var(--panel-2);
+  border-radius: 6px;
+  padding: 8px;
+}
+.m-lb-title {
+  font-size: 11px; font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.m-lb-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: background 0.1s;
+}
+.m-lb-row:hover { background: var(--border); }
+.m-lb-row.pos { border-left: 2px solid var(--buy); }
+.m-lb-row.neg { border-left: 2px solid var(--sell); }
+.m-lb-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.m-lb-pnl { font-weight: 700; font-variant-numeric: tabular-nums; }
+.m-lb-pnl.pos { color: var(--buy); }
+.m-lb-pnl.neg { color: var(--sell); }
+
 /* ---------- Auto-trade panel (DANGER ZONE) ---------- */
 .auto-trade {
   margin-top: 14px; padding-top: 12px;

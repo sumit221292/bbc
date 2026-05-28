@@ -10,6 +10,7 @@ import { fmtPrice } from './lib/format.js'
 import Leaderboard from './components/Leaderboard.jsx'
 import AlertsTab from './components/AlertsTab.jsx'
 import TradesTab from './components/TradesTab.jsx'
+import MatrixTab from './components/MatrixTab.jsx'
 import Resizer from './components/Resizer.jsx'
 import { getIndicators, getKlines, getLeaderboard, getMarketInfo, getOutlook, getStrategies, getStrategySnapshot, runStrategy } from './api.js'
 import { useLiveKlines } from './hooks/useLiveKlines.js'
@@ -241,6 +242,7 @@ export default function App() {
     { id: 'plan',   icon: '📋', label: 'Plan' },
     { id: 'all',    icon: '🎯', label: 'All' },
     { id: 'trades', icon: '📈', label: 'Trades' },
+    { id: 'matrix', icon: '📐', label: 'Matrix' },
     { id: 'best',   icon: '🏆', label: 'Best' },
     { id: 'alerts', icon: '🔔', label: 'Alerts' },
   ]
@@ -340,6 +342,12 @@ export default function App() {
             )}
             {activeTab === 'trades' && (
               <TradesTab
+                strategies={strategies}
+                onJumpToLive={handleJumpToLive}
+              />
+            )}
+            {activeTab === 'matrix' && (
+              <MatrixTab
                 strategies={strategies}
                 onJumpToLive={handleJumpToLive}
               />
