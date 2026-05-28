@@ -62,7 +62,7 @@ def scenario_buy_win() -> None:
         reason="test", created_at=1000,
     )
     trade_store.close_trade(
-        strategy_id="x", interval="1h", signal_time=1000,
+        strategy_id="x", interval="1h", symbol="BTCUSDT", signal_time=1000,
         status="WIN", exit_price=110, exit_time=1120, pnl_pct=10.0,
     )
     rows = trade_store.list_trades(strategy_id="x", interval="1h")
@@ -97,7 +97,7 @@ def scenario_buy_loss() -> None:
         reason="test", created_at=2000,
     )
     trade_store.close_trade(
-        strategy_id="x", interval="1h", signal_time=2000,
+        strategy_id="x", interval="1h", symbol="BTCUSDT", signal_time=2000,
         status="LOSS", exit_price=95, exit_time=2060, pnl_pct=-5.0,
     )
     s = trade_store.stats(strategy_id="x", interval="1h")
@@ -160,7 +160,7 @@ def scenario_partition_isolation() -> None:
         reason="test", created_at=6000,
     )
     trade_store.close_trade(
-        strategy_id="champion", interval="5m", signal_time=6000,
+        strategy_id="champion", interval="5m", symbol="BTCUSDT", signal_time=6000,
         status="WIN", exit_price=110, exit_time=6060, pnl_pct=10.0,
     )
     trade_store.insert_trade(
@@ -169,7 +169,7 @@ def scenario_partition_isolation() -> None:
         reason="test", created_at=6000,
     )
     trade_store.close_trade(
-        strategy_id="champion", interval="1h", signal_time=6000,
+        strategy_id="champion", interval="1h", symbol="BTCUSDT", signal_time=6000,
         status="LOSS", exit_price=190, exit_time=6060, pnl_pct=-5.0,
     )
     s5 = trade_store.stats(strategy_id="champion", interval="5m")
@@ -211,11 +211,11 @@ def scenario_close_idempotency() -> None:
         reason="test", created_at=8000,
     )
     first = trade_store.close_trade(
-        strategy_id="idem", interval="1h", signal_time=8000,
+        strategy_id="idem", interval="1h", symbol="BTCUSDT", signal_time=8000,
         status="WIN", exit_price=110, exit_time=8060, pnl_pct=10.0,
     )
     second = trade_store.close_trade(
-        strategy_id="idem", interval="1h", signal_time=8000,
+        strategy_id="idem", interval="1h", symbol="BTCUSDT", signal_time=8000,
         status="LOSS", exit_price=95, exit_time=8120, pnl_pct=-5.0,
     )
     if not first: fail("first close should succeed")
