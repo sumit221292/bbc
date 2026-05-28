@@ -128,6 +128,7 @@ class SnapshotResponse(BaseModel):
 # All-tab when they surface.
 _CATEGORIES: dict[str, str] = {
     "confluence": "Confluence",
+    "ema34_rejection": "EMA 34 (rejection + pullback)",
     "mtf_chop_aware": "Recommended (Multi-TF)",
     "mtf_strict": "Recommended (Multi-TF)",
     "mtf_2screen": "Recommended (Multi-TF)",

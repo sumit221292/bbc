@@ -1,0 +1,275 @@
+//@version=5
+// EMA 34 Rejection + Pullback Pro v11 [Profiles]
+//
+// Original Pine v11 indicator the user supplied (see project chat
+// thread). Kept verbatim here so the TradingView chart can use the
+// SAME logic the backend port (app/strategies/ema34_rejection.py)
+// runs server-side. If you tweak one, mirror the change in the other
+// so the chart markers stay aligned with worker-fired signals.
+indicator("EMA 34 Rejection+Pullback Pro v11 [Profiles]", overlay=true, max_labels_count=500, max_lines_count=50)
+
+// ---------- Profile system ----------
+grpProfile = "-- Profile (Quick Setup) --"
+profile    = input.string("Day Trader", "Profile", options=["Scalper", "Day Trader", "Swing", "Custom"], group=grpProfile)
+
+isScalper   = profile == "Scalper"
+isDayTrader = profile == "Day Trader"
+isSwing     = profile == "Swing"
+isCustom    = profile == "Custom"
+
+// ---------- Inputs (Custom mode) ----------
+grpEMA = "-- EMA Settings --"
+emaLen          = input.int(34, "EMA Length", minval=5, group=grpEMA)
+slopeLookback   = input.int(10, "Trend Strength Lookback", minval=3, group=grpEMA)
+slopeMultiplier = input.float(0.3, "Slope Threshold (xATR)", minval=0.1, step=0.1, group=grpEMA)
+
+grpEntry = "-- Entry Mode --"
+entryMode    = input.string("Aggressive", "Entry Mode", options=["Aggressive", "Conservative"], group=grpEntry)
+inStrictMode = input.bool(true, "Strict Mode (Custom only)", group=grpEntry)
+
+grpMode = "-- Signal Modes --"
+useRejection = input.bool(true, "Enable Rejection Mode", group=grpMode)
+usePullback  = input.bool(true, "Enable Pullback Mode", group=grpMode)
+
+grpSignal = "-- Rejection Settings (Custom only) --"
+inMinCandles = input.int(3, "Min Candles Away from EMA", minval=1, maxval=10, group=grpSignal)
+inMaxCandles = input.int(15, "Max Candles Away", minval=5, maxval=30, group=grpSignal)
+wickRatio    = input.float(0.5, "Min Wick Ratio", minval=0.1, maxval=0.9, step=0.05, group=grpSignal)
+
+grpPullback = "-- Pullback Settings (Custom only) --"
+inPbProx    = input.float(0.3, "EMA Proximity (xATR)", minval=0.1, maxval=2.0, step=0.1, group=grpPullback)
+inPbMaxBars = input.int(3, "Max Bars Touching EMA", minval=1, maxval=10, group=grpPullback)
+
+grpCommon = "-- Common (Custom only) --"
+bodyRatio  = input.float(0.3, "Min Body Ratio (Conservative)", minval=0.1, maxval=0.9, step=0.05, group=grpCommon)
+inCooldown = input.int(5, "Cooldown Bars", minval=0, group=grpCommon)
+
+grpScore = "-- Score System (Custom only) --"
+inMinScore  = input.int(5, "Minimum Score (out of 7)", minval=1, maxval=7, group=grpScore)
+useRSI      = input.bool(true, "RSI",       group=grpScore)
+useMACD     = input.bool(true, "MACD",      group=grpScore)
+useEMAstack = input.bool(true, "EMA Stack", group=grpScore)
+useVWAP     = input.bool(true, "VWAP",      group=grpScore)
+useBB       = input.bool(true, "BB",        group=grpScore)
+useVolume   = input.bool(true, "Volume",    group=grpScore)
+useHTFconf  = input.bool(true, "HTF",       group=grpScore)
+
+grpFilters = "-- Filters (Custom only) --"
+useATRfilter = input.bool(true, "Min Volatility", group=grpFilters)
+inAtrPctMin  = input.float(0.15, "Min ATR %", minval=0.0, step=0.05, group=grpFilters)
+htfTimeframe = input.timeframe("15", "Higher Timeframe", group=grpFilters)
+
+grpRisk = "-- Risk (Custom only) --"
+inSlATR = input.float(1.5, "Stop Loss xATR", minval=0.5, step=0.1, group=grpRisk)
+inRr1   = input.float(1.5, "TP1 R:R",       minval=0.5, step=0.1, group=grpRisk)
+inRr2   = input.float(3.0, "TP2 R:R",       minval=0.5, step=0.1, group=grpRisk)
+
+grpHistory = "-- History Markers --"
+showHistory    = input.bool(true, "Show Past Trade Markers", group=grpHistory)
+showLastResult = input.bool(true, "Show Last Result Flash", group=grpHistory)
+
+grpStats = "-- Dashboard --"
+showDashboard  = input.bool(true, "Show Dashboard", group=grpStats)
+showScoreTable = input.bool(true, "Show Score Table", group=grpStats)
+
+// ---------- Apply profile values ----------
+minScore        = isScalper ? 3 : isDayTrader ? 5 : isSwing ? 6 : inMinScore
+cooldownBars    = isScalper ? 2 : isDayTrader ? 5 : isSwing ? 10 : inCooldown
+strictMode      = isScalper ? false : isDayTrader ? true : isSwing ? true : inStrictMode
+minCandlesAway  = isScalper ? 2 : isDayTrader ? 3 : isSwing ? 4 : inMinCandles
+maxCandlesAway  = isScalper ? 10 : isDayTrader ? 15 : isSwing ? 20 : inMaxCandles
+pullbackProx    = isScalper ? 0.5 : isDayTrader ? 0.3 : isSwing ? 0.4 : inPbProx
+pullbackMaxBars = isScalper ? 4 : isDayTrader ? 3 : isSwing ? 5 : inPbMaxBars
+atrPctMin       = isScalper ? 0.10 : isDayTrader ? 0.15 : isSwing ? 0.25 : inAtrPctMin
+slATR           = isScalper ? 1.2 : isDayTrader ? 1.5 : isSwing ? 2.0 : inSlATR
+rr1             = isScalper ? 1.0 : isDayTrader ? 1.5 : isSwing ? 2.0 : inRr1
+rr2             = isScalper ? 2.0 : isDayTrader ? 3.0 : isSwing ? 4.0 : inRr2
+
+isAggressive = entryMode == "Aggressive"
+
+// ---------- Core indicators ----------
+ema34  = ta.ema(close, emaLen)
+ema21  = ta.ema(close, 21)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+atr14  = ta.atr(14)
+volMA  = ta.sma(volume, 20)
+
+rsi14 = ta.rsi(close, 14)
+[macdLine, signalLine, macdHist] = ta.macd(close, 12, 26, 9)
+vwapVal = ta.vwap(hlc3)
+bbBasis = ta.sma(close, 20)
+
+emaSlope       = ema34 - ema34[slopeLookback]
+slopeThreshold = atr14 * slopeMultiplier
+isStrongUp     = emaSlope >  slopeThreshold
+isStrongDn     = emaSlope < -slopeThreshold
+
+htfEma = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, emaLen)[1], lookahead=barmerge.lookahead_off)
+
+atrPct = atr14 / close * 100
+atrOK  = not useATRfilter or atrPct >= atrPctMin
+
+emaColor = isStrongUp ? color.lime : isStrongDn ? color.red : color.gray
+plot(ema34,  "EMA 34",  emaColor, 2)
+plot(ema200, "EMA 200", color.new(color.purple, 50), 1)
+plot(useVWAP ? vwapVal : na, "VWAP", color.new(color.aqua, 30), 1)
+plot(htfEma, "HTF EMA", color.new(color.orange, 40), 1)
+
+// ---------- Rejection state machine ----------
+var bool waitBuy      = false
+var bool waitSell     = false
+var int  candlesAbove = 0
+var int  candlesBelow = 0
+var int  lastSignalBar = -1000
+
+if ta.crossover(close, ema34)
+    waitBuy  := true
+    waitSell := false
+    candlesAbove := 0
+if ta.crossunder(close, ema34)
+    waitSell := true
+    waitBuy  := false
+    candlesBelow := 0
+
+if waitBuy
+    if low > ema34
+        candlesAbove += 1
+    if candlesAbove > maxCandlesAway
+        waitBuy := false
+if waitSell
+    if high < ema34
+        candlesBelow += 1
+    if candlesBelow > maxCandlesAway
+        waitSell := false
+
+// ---------- Candle anatomy ----------
+cRange  = math.max(high - low, syminfo.mintick)
+cBody   = math.abs(close - open)
+cUpWick = high - math.max(close, open)
+cLoWick = math.min(close, open) - low
+
+pRange  = math.max(high[1] - low[1], syminfo.mintick)
+pUpWick = high[1] - math.max(close[1], open[1])
+pLoWick = math.min(close[1], open[1]) - low[1]
+
+// ---------- Rejection detection (Aggressive + Conservative) ----------
+aggBuyRej  = waitBuy and isStrongUp and candlesAbove >= minCandlesAway and low <= ema34 and close > ema34 and close > open and cLoWick >= cRange * wickRatio
+aggSellRej = waitSell and isStrongDn and candlesBelow >= minCandlesAway and high >= ema34 and close < ema34 and close < open and cUpWick >= cRange * wickRatio
+
+prevBuyRej  = waitBuy[1] and isStrongUp[1] and candlesAbove[1] >= minCandlesAway and low[1] <= ema34[1] and close[1] > ema34[1] and close[1] > open[1] and pLoWick >= pRange * wickRatio
+prevSellRej = waitSell[1] and isStrongDn[1] and candlesBelow[1] >= minCandlesAway and high[1] >= ema34[1] and close[1] < ema34[1] and close[1] < open[1] and pUpWick >= pRange * wickRatio
+
+// ---------- Pullback detection ----------
+emaUpperZone = ema34 + atr14 * pullbackProx
+emaLowerZone = ema34 - atr14 * pullbackProx
+
+touchedEmaFromAbove = false
+touchedEmaFromBelow = false
+for i = 1 to pullbackMaxBars
+    if low[i] <= ema34[i] and close[i] > ema34[i]
+        touchedEmaFromAbove := true
+    if high[i] >= ema34[i] and close[i] < ema34[i]
+        touchedEmaFromBelow := true
+
+aggPbBuy  = isStrongUp and low  <= emaUpperZone and close > ema34 and close > open
+aggPbSell = isStrongDn and high >= emaLowerZone and close < ema34 and close < open
+
+conPbBuy  = isStrongUp and touchedEmaFromAbove and close > ema34 and close > open and low  > emaLowerZone
+conPbSell = isStrongDn and touchedEmaFromBelow and close < ema34 and close < open and high < emaUpperZone
+
+// ---------- Score calculation ----------
+buyRSI  = useRSI ? (rsi14 > 45 and rsi14 < 70) : true
+sellRSI = useRSI ? (rsi14 < 55 and rsi14 > 30) : true
+
+buyMACD  = useMACD ? (macdHist > 0 and macdHist > macdHist[1]) : true
+sellMACD = useMACD ? (macdHist < 0 and macdHist < macdHist[1]) : true
+
+buyEMAstack  = useEMAstack ? (isScalper ? (ema21 > ema50) : (ema21 > ema50 and close > ema200)) : true
+sellEMAstack = useEMAstack ? (isScalper ? (ema21 < ema50) : (ema21 < ema50 and close < ema200)) : true
+
+buyVWAP  = useVWAP ? (close > vwapVal) : true
+sellVWAP = useVWAP ? (close < vwapVal) : true
+
+buyBB  = useBB ? (close > bbBasis) : true
+sellBB = useBB ? (close < bbBasis) : true
+
+volSpike = useVolume ? (volume > volMA * 1.2) : true
+
+buyHTF  = useHTFconf ? (close > htfEma) : true
+sellHTF = useHTFconf ? (close < htfEma) : true
+
+buyScore  = (buyRSI ? 1 : 0) + (buyMACD ? 1 : 0) + (buyEMAstack ? 1 : 0) + (buyVWAP ? 1 : 0) + (buyBB ? 1 : 0) + (volSpike ? 1 : 0) + (buyHTF ? 1 : 0)
+sellScore = (sellRSI ? 1 : 0) + (sellMACD ? 1 : 0) + (sellEMAstack ? 1 : 0) + (sellVWAP ? 1 : 0) + (sellBB ? 1 : 0) + (volSpike ? 1 : 0) + (sellHTF ? 1 : 0)
+maxScore  = (useRSI ? 1 : 0) + (useMACD ? 1 : 0) + (useEMAstack ? 1 : 0) + (useVWAP ? 1 : 0) + (useBB ? 1 : 0) + (useVolume ? 1 : 0) + (useHTFconf ? 1 : 0)
+
+// ---------- Strict mode trend lock ----------
+var int  lastSignalDir = 0
+var bool trendChanged  = true
+if lastSignalDir == -1 and ta.crossover(close, ema34)
+    trendChanged := true
+if lastSignalDir == 1 and ta.crossunder(close, ema34)
+    trendChanged := true
+
+// ---------- Final confirmation ----------
+cooledDown = bar_index - lastSignalBar >= cooldownBars
+strongBody = cBody >= cRange * bodyRatio
+
+buyRejActive  = isAggressive ? aggBuyRej  : prevBuyRej
+sellRejActive = isAggressive ? aggSellRej : prevSellRej
+buyPbActive   = isAggressive ? aggPbBuy   : conPbBuy
+sellPbActive  = isAggressive ? aggPbSell  : conPbSell
+
+bodyCheck = isAggressive ? true : strongBody
+
+rejBuyRaw  = useRejection and buyRejActive  and bodyCheck and cooledDown and atrOK and buyScore  >= minScore
+rejSellRaw = useRejection and sellRejActive and bodyCheck and cooledDown and atrOK and sellScore >= minScore
+pbBuyRaw   = usePullback  and buyPbActive   and bodyCheck and cooledDown and atrOK and buyScore  >= minScore
+pbSellRaw  = usePullback  and sellPbActive  and bodyCheck and cooledDown and atrOK and sellScore >= minScore
+
+buyAllowed  = not strictMode or lastSignalDir != 1  or trendChanged
+sellAllowed = not strictMode or lastSignalDir != -1 or trendChanged
+
+rejBuyOK  = rejBuyRaw  and buyAllowed
+rejSellOK = rejSellRaw and sellAllowed
+pbBuyOK   = pbBuyRaw   and buyAllowed
+pbSellOK  = pbSellRaw  and sellAllowed
+
+buySignal  = rejBuyOK or pbBuyOK
+sellSignal = rejSellOK or pbSellOK
+
+if buySignal
+    waitBuy := false
+    candlesAbove := 0
+    lastSignalBar := bar_index
+    lastSignalDir := 1
+    trendChanged := false
+if sellSignal
+    waitSell := false
+    candlesBelow := 0
+    lastSignalBar := bar_index
+    lastSignalDir := -1
+    trendChanged := false
+
+suppressedBuy  = (rejBuyRaw or pbBuyRaw) and not buyAllowed
+suppressedSell = (rejSellRaw or pbSellRaw) and not sellAllowed
+
+// ---------- Signal labels ----------
+plotshape(rejBuyOK,  style=shape.labelup,   location=location.belowbar, color=color.green,                text="REJ\nBUY",  textcolor=color.white, size=size.small)
+plotshape(pbBuyOK,   style=shape.labelup,   location=location.belowbar, color=color.new(color.green, 30), text="PB\nBUY",   textcolor=color.white, size=size.small)
+plotshape(rejSellOK, style=shape.labeldown, location=location.abovebar, color=color.red,                  text="REJ\nSELL", textcolor=color.white, size=size.small)
+plotshape(pbSellOK,  style=shape.labeldown, location=location.abovebar, color=color.red,                  text="PB\nSELL",  textcolor=color.white, size=size.small)
+
+plotshape(suppressedBuy,  style=shape.xcross, location=location.belowbar, color=color.new(color.gray, 40), size=size.tiny)
+plotshape(suppressedSell, style=shape.xcross, location=location.abovebar, color=color.new(color.gray, 40), size=size.tiny)
+
+bgcolor(buySignal  ? color.new(color.green, 85) : na)
+bgcolor(sellSignal ? color.new(color.red,   85) : na)
+
+// ---------- Alerts ----------
+alertcondition(rejBuyOK,   "Rejection BUY",  "EMA34 Rejection BUY {{ticker}} @ {{close}}")
+alertcondition(rejSellOK,  "Rejection SELL", "EMA34 Rejection SELL {{ticker}} @ {{close}}")
+alertcondition(pbBuyOK,    "Pullback BUY",   "EMA34 Pullback BUY {{ticker}} @ {{close}}")
+alertcondition(pbSellOK,   "Pullback SELL",  "EMA34 Pullback SELL {{ticker}} @ {{close}}")
+alertcondition(buySignal,  "Any BUY",        "EMA34 BUY {{ticker}} @ {{close}}")
+alertcondition(sellSignal, "Any SELL",       "EMA34 SELL {{ticker}} @ {{close}}")

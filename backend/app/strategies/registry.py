@@ -25,6 +25,7 @@ from .adx_trend import ADXTrend
 from .champion import Champion
 from .price_action import PriceAction
 from .confluence import Confluence
+from .ema34_rejection import EMA34Rejection
 
 # --- Class files kept on disk but NOT registered (consistently negative PnL) ---
 # from .best import BestTrade            #  0% WR, -23.57% PnL over 18 trades
@@ -41,7 +42,7 @@ from .confluence import Confluence
 _STRATEGIES: dict[str, type[Strategy]] = {
     cls.id: cls for cls in (
         Confluence,
-        Champion, PriceAction,
+        Champion, PriceAction, EMA34Rejection,
         DonchianTurtle, SuperTrendFlip, StochasticReversal, ADXTrend,
         ScalpingRSI, DayTradingEMACross,
     )

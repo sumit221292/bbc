@@ -11,6 +11,10 @@ const CATEGORIES = [
     ids: ['confluence'],
   },
   {
+    label: '📐 EMA 34 (rejection + pullback, port of Pine v11)',
+    ids: ['ema34_rejection'],
+  },
+  {
     label: '🏆 Champion (regime-adaptive, all-in-one)',
     ids: ['champion'],
   },
