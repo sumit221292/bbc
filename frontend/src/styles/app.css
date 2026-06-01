@@ -1089,6 +1089,99 @@ body {
 .m-lb-pnl.pos { color: var(--buy); }
 .m-lb-pnl.neg { color: var(--sell); }
 
+/* ---------- (strategy, coin) pair whitelist ---------- */
+.auto-pairs {
+  padding: 10px 12px;
+  background: rgba(38,166,154,0.05);
+  border: 1px solid rgba(38,166,154,0.3);
+  border-radius: 6px;
+  margin-top: 6px;
+}
+.auto-pairs .title {
+  font-size: 11px; font-weight: 700;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.auto-pairs-empty {
+  padding: 8px;
+  background: var(--bg);
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.auto-pairs-list {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 8px;
+}
+.auto-pair-row {
+  display: flex; align-items: center;
+  padding: 6px 10px;
+  background: var(--bg);
+  border-left: 3px solid var(--buy);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.auto-pair-coin {
+  font-weight: 700;
+  color: var(--accent);
+}
+.auto-pair-strat { color: var(--text); }
+.auto-pair-remove {
+  margin-left: auto;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.auto-pair-remove:hover {
+  color: var(--sell); border-color: var(--sell);
+}
+
+.auto-pair-add {
+  display: flex; gap: 6px; align-items: center;
+  margin-top: 6px;
+}
+.auto-pair-strat-select {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.auto-pair-add .symbol-picker { flex: 1; }
+.auto-pair-add-btn {
+  padding: 6px 10px;
+  font-size: 11px; font-weight: 600;
+  background: var(--buy);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.auto-pair-add-btn:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+.auto-pair-add-btn:hover:not(:disabled) { filter: brightness(1.1); }
+.auto-pair-draft {
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-style: italic;
+}
+
+.alc-pair-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  margin: 1px 4px 1px 0;
+  background: rgba(38,166,154,0.15);
+  border: 1px solid rgba(38,166,154,0.4);
+  border-radius: 999px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .auto-live-config {
   padding: 10px 12px;
   background: var(--panel-2);

@@ -19,13 +19,32 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
   const [confirmation, setConfirmation] = useState('')
   const [allowed, setAllowed] = useState(at?.allowed_strategies ?? [])
   const [enabled, setEnabled] = useState(at?.enabled ?? false)
-  // Auto-trade target coin. Defaults to whatever cfg.symbol currently is
-  // on the server (BTCUSDT out of the box). User picks via SymbolPicker;
-  // the backend will auto-add the coin to the watchlist too so signals
-  // actually fire on it.
+  // Auto-trade target coin (legacy single-coin mode). Defaults to
+  // whatever cfg.symbol currently is on the server (BTCUSDT out of the
+  // box). User picks via SymbolPicker; the backend will auto-add the
+  // coin to the watchlist too so signals actually fire on it.
   const [symbol, setSymbol] = useState(serverState?.symbol ?? 'BTCUSDT')
+  // New multi-pair whitelist: explicit (strategy_id, symbol) combos.
+  // Replaces the "one strategy on one coin" model when populated.
+  const [pairs, setPairs] = useState(at?.allowed_pairs ?? [])
+  // Inline builder state for the "+ Add pair" form.
+  const [draftStrategy, setDraftStrategy] = useState('')
+  const [draftSymbol, setDraftSymbol] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
+
+  const addPair = () => {
+    if (!draftStrategy || !draftSymbol) return
+    const sym = draftSymbol.toUpperCase()
+    // Dedupe -- silently swallow a re-add of the same combo.
+    if (pairs.some(p => p.strategy_id === draftStrategy && p.symbol === sym)) return
+    setPairs([...pairs, { strategy_id: draftStrategy, symbol: sym }])
+    setDraftStrategy('')
+    setDraftSymbol('')
+  }
+  const removePair = (idx) => {
+    setPairs(pairs.filter((_, i) => i !== idx))
+  }
 
   const toggleAllowed = (id) => {
     setAllowed(allowed.includes(id)
@@ -60,6 +79,7 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
         max_daily_loss_pct: Number(maxLoss),
         confirmation,
         allowed_strategies: allowed,
+        allowed_pairs: pairs,
         symbol: symbol || '',
       })
       setApiKey('')         // never keep secrets in component state after save
@@ -122,14 +142,29 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
                 <b>{serverState?.symbol || '—'}</b>
               </span>
             </div>
-            <div className="alc-row">
-              <span className="alc-key">Allowed strategies</span>
-              <span className="alc-val">
-                {allowedNames.length > 0
-                  ? allowedNames.join(', ')
-                  : <span className="muted">none (will block all fires)</span>}
-              </span>
-            </div>
+            {(at.allowed_pairs && at.allowed_pairs.length > 0) ? (
+              <div className="alc-row">
+                <span className="alc-key">Allowed (strategy, coin) pairs</span>
+                <span className="alc-val">
+                  {at.allowed_pairs.map((p, i) => (
+                    <span key={`${p.strategy_id}-${p.symbol}`} className="alc-pair-chip">
+                      {strategyNameMap[p.strategy_id]?.replace(/^[^\w]+\s*/, '') || p.strategy_id}
+                      <span className="muted"> on </span>
+                      {p.symbol.replace(/USDT$/, '')}
+                    </span>
+                  ))}
+                </span>
+              </div>
+            ) : (
+              <div className="alc-row">
+                <span className="alc-key">Allowed strategies (legacy)</span>
+                <span className="alc-val">
+                  {allowedNames.length > 0
+                    ? allowedNames.join(', ')
+                    : <span className="muted">none (will block all fires)</span>}
+                </span>
+              </div>
+            )}
             <div className="alc-row">
               <span className="alc-key">Capital</span>
               <span className="alc-val">${at.capital_usd.toFixed(2)}</span>
@@ -297,8 +332,78 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
           </div>
         </div>
 
+        <div className="auto-pairs">
+          <div className="title">
+            (Strategy, Coin) pair whitelist
+            <span className="muted small"> — only matching combos fire real orders</span>
+          </div>
+
+          {/* Current pair list */}
+          {pairs.length === 0 ? (
+            <div className="muted small auto-pairs-empty">
+              No pairs yet. Add (strategy, coin) combos below, e.g.
+              <code> mtf_2screen + ZECUSDT</code>. When set, this list
+              replaces the legacy "single target + strategy whitelist"
+              model below.
+            </div>
+          ) : (
+            <div className="auto-pairs-list">
+              {pairs.map((p, i) => {
+                const stratLabel = (strategyNameMap[p.strategy_id] || p.strategy_id)
+                  .replace(/^[^\w]+\s*/, '')
+                  .slice(0, 22)
+                const coinLabel = p.symbol.replace(/USDT$/, '')
+                return (
+                  <div key={`${p.strategy_id}-${p.symbol}-${i}`} className="auto-pair-row">
+                    <span className="auto-pair-coin">{coinLabel}</span>
+                    <span className="muted"> · </span>
+                    <span className="auto-pair-strat">{stratLabel}</span>
+                    <button type="button" className="auto-pair-remove"
+                            title="Remove pair"
+                            onClick={() => removePair(i)}>×</button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* + Add pair form */}
+          <div className="auto-pair-add">
+            <select
+              value={draftStrategy}
+              onChange={e => setDraftStrategy(e.target.value)}
+              className="auto-pair-strat-select"
+            >
+              <option value="">Pick strategy…</option>
+              {strategies.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            <SymbolPicker
+              value=""
+              placeholder={draftSymbol || "Pick coin…"}
+              size="compact"
+              onChange={sym => sym && setDraftSymbol(sym)}
+            />
+            <button type="button" className="auto-pair-add-btn"
+                    disabled={!draftStrategy || !draftSymbol}
+                    onClick={addPair}>
+              + Add pair
+            </button>
+          </div>
+          {draftSymbol && (
+            <div className="muted small auto-pair-draft">
+              Draft: <b>{draftSymbol}</b> · {draftStrategy
+                ? (strategyNameMap[draftStrategy] || draftStrategy)
+                : 'pick a strategy →'}
+            </div>
+          )}
+        </div>
+
         <div className="auto-strategies">
-          <div className="title">Whitelisted strategies (only these can fire real orders)</div>
+          <div className="title">
+            Legacy: Whitelisted strategies <span className="muted small">(only used when pair list above is empty)</span>
+          </div>
           <div className="alerts-subs-list">
             {strategies.map(s => (
               <label key={s.id} className={`alerts-sub-row ${allowed.includes(s.id) ? 'on' : ''}`}>

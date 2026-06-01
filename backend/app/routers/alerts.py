@@ -15,9 +15,9 @@ from pydantic import BaseModel
 log = logging.getLogger("btc.alerts.router")
 
 from ..alerts import (
-    AlertConfig, AutoTradeConfig, CONFIRM_PHRASE, MAX_RISK_PCT,
-    OpenPosition, Subscription, _is_known_strategy, load_config,
-    save_config, send_telegram,
+    AlertConfig, AllowedPair, AutoTradeConfig, CONFIRM_PHRASE,
+    MAX_RISK_PCT, OpenPosition, Subscription, _is_known_strategy,
+    load_config, save_config, send_telegram,
 )
 from ..auth import require_auth
 from ..binance_trade import cancel_all_open_orders, test_credentials
@@ -56,7 +56,8 @@ class AutoTradeView(BaseModel):
     max_position_usd: float
     max_trades_per_day: int
     max_daily_loss_pct: float
-    allowed_strategies: list[str]
+    allowed_strategies: list[str]    # legacy
+    allowed_pairs: list[AllowedPair]  # new (strategy, symbol) whitelist
     current_position: OpenPosition | None
     trades_today: int
     loss_today_pct: float
@@ -91,6 +92,7 @@ def _auto_view(at: AutoTradeConfig) -> AutoTradeView:
         max_trades_per_day=at.max_trades_per_day,
         max_daily_loss_pct=at.max_daily_loss_pct,
         allowed_strategies=at.allowed_strategies,
+        allowed_pairs=at.allowed_pairs,
         current_position=at.current_position,
         trades_today=at.trades_today,
         loss_today_pct=at.loss_today_pct,
@@ -215,10 +217,14 @@ class AutoTradeUpdate(BaseModel):
     max_daily_loss_pct: float = 0.05
     confirmation: str = ""        # user must type CONFIRM_PHRASE to enable
     allowed_strategies: list[str] = []
-    # Auto-trade target symbol. Empty = keep whatever's currently set
-    # in cfg. Setting it routes orders + worker auto-execute to this
-    # coin and also injects it into the watchlist so the worker
-    # actually evaluates signals on it.
+    # New multi-pair whitelist: explicit (strategy, coin) combos. When
+    # non-empty this takes precedence over allowed_strategies+symbol so
+    # the user can pick e.g. mtf_2screen-on-ZEC + scalping-on-SUI as
+    # independent watch points.
+    allowed_pairs: list[AllowedPair] = []
+    # Auto-trade target symbol (legacy single-coin mode). Empty = keep
+    # current. Still honoured when allowed_pairs is empty so existing
+    # single-coin configs don't break.
     symbol: str = ""
 
 
@@ -263,11 +269,40 @@ async def _update_auto_trade_impl(payload: AutoTradeUpdate):
     at.confirmation = payload.confirmation
     at.allowed_strategies = payload.allowed_strategies
 
+    # Normalise the (strategy, symbol) pair list -- upper-case symbols,
+    # drop unknown strategies + duplicates. The worker uses this exact
+    # list as the auto-trade whitelist, so cleanup here keeps the
+    # downstream `any(p.strategy_id == ... and p.symbol == ...)` cheap
+    # and predictable.
+    seen_pairs: set[tuple[str, str]] = set()
+    cleaned_pairs: list[AllowedPair] = []
+    for p in payload.allowed_pairs:
+        sid = (p.strategy_id or "").strip()
+        sym = (p.symbol or "").strip().upper()
+        if not sid or not sym:
+            continue
+        if not _is_known_strategy(sid):
+            continue
+        key = (sid, sym)
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        cleaned_pairs.append(AllowedPair(strategy_id=sid, symbol=sym))
+    at.allowed_pairs = cleaned_pairs
+
+    # Inject every pair's coin into the watchlist (cfg.symbols) so the
+    # worker actually evaluates signals on each one -- a pair pointing
+    # at a coin not in cfg.symbols would never fire.
+    for p in at.allowed_pairs:
+        if p.symbol not in cfg.symbols:
+            cfg.symbols = [*cfg.symbols, p.symbol]
+
     # Auto-trade target symbol. Empty payload value means "keep current"
     # so the form doesn't have to round-trip the existing symbol every
     # time. When set, also inject into the watchlist (cfg.symbols) --
     # otherwise the alert worker won't even evaluate signals on this
     # coin, and there'd be nothing for the auto-trader to act on.
+    # Legacy single-target mode; ignored when allowed_pairs is set.
     if payload.symbol:
         new_symbol = payload.symbol.strip().upper()
         if new_symbol:
@@ -282,17 +317,21 @@ async def _update_auto_trade_impl(payload: AutoTradeUpdate):
     # `at.enabled = payload.enabled and can_enable` as a list, and
     # Pydantic v2's strict bool validator rejected it on the way back
     # out through _auto_view. Easy to miss; easy to fix here.
+    # Either allowed_pairs OR allowed_strategies is enough to enable --
+    # accept whichever the user has actually configured.
+    has_targets = bool(at.allowed_pairs) or bool(at.allowed_strategies)
     can_enable = bool(
         at.api_key
         and at.api_secret
         and at.confirmation == CONFIRM_PHRASE
-        and at.allowed_strategies
+        and has_targets
     )
     if payload.enabled and not can_enable:
         raise HTTPException(
             400,
             "Cannot enable auto-trade: need api_key + api_secret + "
-            f"confirmation='{CONFIRM_PHRASE}' + at least 1 allowed_strategy",
+            f"confirmation='{CONFIRM_PHRASE}' + at least 1 allowed pair "
+            "(or legacy allowed_strategy)",
         )
     at.enabled = payload.enabled and can_enable
 

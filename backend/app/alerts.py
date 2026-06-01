@@ -99,6 +99,20 @@ class OpenPosition(BaseModel):
     opened_at: int             # epoch seconds
 
 
+class AllowedPair(BaseModel):
+    """Explicit (strategy_id, symbol) whitelist entry for auto-trade.
+
+    The previous design coupled one cfg.symbol with a flat list of
+    allowed_strategies, which forced every whitelisted strategy onto
+    the same coin -- terrible fit when each strategy has a different
+    "best coin" per the live performance matrix. AllowedPair lets the
+    user pick e.g. (mtf_2screen, ZECUSDT) AND (scalping, SUIUSDT)
+    side by side; auto-trade fires whichever pair triggers first.
+    """
+    strategy_id: str
+    symbol: str
+
+
 class AutoTradeConfig(BaseModel):
     """Live auto-execution settings — every safety knob defaults to OFF/conservative."""
     enabled: bool = False             # master switch (default OFF)
@@ -110,9 +124,14 @@ class AutoTradeConfig(BaseModel):
     max_trades_per_day: int = 5
     max_daily_loss_pct: float = 0.05  # halt if -5% intraday
     confirmation: str = ""            # must equal CONFIRM_PHRASE to enable
-    # Per-strategy whitelist: only these strategy IDs are allowed to auto-trade.
-    # Empty list = NO auto-trade even if enabled.
+    # Per-strategy whitelist: only these strategy IDs are allowed to
+    # auto-trade against the legacy cfg.symbol target.
+    # KEPT FOR BACKWARD COMPAT. New configs should use allowed_pairs.
     allowed_strategies: list[str] = Field(default_factory=list)
+    # New explicit (strategy, coin) whitelist. When non-empty, takes
+    # precedence over allowed_strategies + cfg.symbol entirely -- the
+    # worker will only auto-trade pairs that appear in this list.
+    allowed_pairs: list[AllowedPair] = Field(default_factory=list)
     # Smart trade manager state
     current_position: Optional[OpenPosition] = None
     # Daily counters (reset at UTC midnight by alert_loop)
@@ -528,17 +547,45 @@ async def _close_position(at: AutoTradeConfig, symbol: str) -> tuple[bool, str]:
     return True, f"closed {pos.side} {pos.qty:.6f}"
 
 
-async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str | None:
+def _is_pair_allowed(at: AutoTradeConfig, strategy_id: str, symbol: str,
+                     legacy_target_symbol: str) -> bool:
+    """Whether this (strategy, coin) combo is whitelisted for auto-trade.
+
+    Precedence:
+      * If allowed_pairs is non-empty -> use it exclusively. Every
+        (strategy, symbol) must appear as an entry.
+      * Otherwise fall back to the legacy single-target model:
+        strategy must be in allowed_strategies AND symbol must match
+        cfg.symbol.
+
+    legacy_target_symbol is plumbed in rather than read from cfg here
+    so this helper can stay free of the AlertConfig dependency.
+    """
+    if at.allowed_pairs:
+        return any(
+            p.strategy_id == strategy_id and p.symbol == symbol
+            for p in at.allowed_pairs
+        )
+    return (
+        strategy_id in at.allowed_strategies
+        and symbol == legacy_target_symbol
+    )
+
+
+async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig, symbol: str) -> str | None:
     """Smart manager — handles position state to avoid averaging and to
     reverse cleanly on opposite signals.
 
-    Spot rules (current code path):
+    Spot rules:
       no position + BUY signal   -> open LONG
       no position + SELL signal  -> skip (Spot can't short)
       LONG       + BUY signal    -> skip (no averaging)
       LONG       + SELL signal   -> close LONG, leave flat
 
-    Telegram message reflects whichever path was taken.
+    `symbol` is the coin THIS signal fired on -- previously the worker
+    only called this when symbol matched cfg.symbol, but multi-pair
+    whitelisting needs the executor to handle any coin. The legacy
+    single-target check is preserved via _is_pair_allowed's fall-back.
     """
     at = cfg.auto_trade
 
@@ -549,13 +596,13 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
         return "auto-trade: skipped (confirmation phrase missing)"
     if not at.api_key or not at.api_secret:
         return "auto-trade: skipped (no API key)"
-    if sub.strategy_id not in at.allowed_strategies:
-        return f"auto-trade: skipped ({sub.strategy_id} not whitelisted)"
+    if not _is_pair_allowed(at, sub.strategy_id, symbol, cfg.symbol):
+        return f"auto-trade: skipped ({sub.strategy_id} on {symbol} not whitelisted)"
     if at.halted_reason:
         return f"auto-trade: HALTED — {at.halted_reason}"
 
     # First: clean up stale position state by checking the wallet
-    await _sync_position_state(at, cfg.symbol)
+    await _sync_position_state(at, symbol)
 
     # Daily counters
     now = int(time.time())
@@ -585,7 +632,7 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
     # Case 2: opposite direction -> close existing first
     closed_msg = ""
     if pos is not None and pos.side != new_side:
-        ok, msg = await _close_position(at, cfg.symbol)
+        ok, msg = await _close_position(at, symbol)
         if not ok:
             return f"auto-trade: REVERSE-CLOSE FAILED — {msg}"
         closed_msg = f"closed prior {pos.side} ({pos.strategy_id}) ✂️ "
@@ -600,7 +647,7 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
     # Sizing for the new entry
     risk = min(at.risk_pct, MAX_RISK_PCT)
     try:
-        info = await get_exchange_info(cfg.symbol)
+        info = await get_exchange_info(symbol)
     except Exception as e:
         at.last_trade_error = f"exchange info failed: {e}"
         return f"{closed_msg}auto-trade: skipped (exchange info: {e})"
@@ -618,8 +665,8 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
     # Place the entry market order (BUY for LONG)
     try:
         log.info("[AUTO-TRADE] placing BUY %s qty=%s (%s)",
-                 cfg.symbol, qty, sizing_msg)
-        entry_resp = await place_market(at.api_key, at.api_secret, cfg.symbol, "BUY", qty)
+                 symbol, qty, sizing_msg)
+        entry_resp = await place_market(at.api_key, at.api_secret, symbol, "BUY", qty)
     except Exception as e:
         at.last_trade_error = f"entry failed: {e}"
         log.error("[AUTO-TRADE] entry failed: %s", e)
@@ -630,7 +677,7 @@ async def _maybe_auto_execute(cfg: AlertConfig, sub: Subscription, sig) -> str |
     stop_limit = sig.stop_loss - tick * 2  # below stop_price for BUY long exit
     try:
         await place_oco(
-            at.api_key, at.api_secret, cfg.symbol, "SELL", qty,
+            at.api_key, at.api_secret, symbol, "SELL", qty,
             take_profit_price=sig.target,
             stop_price=sig.stop_loss,
             stop_limit_price=stop_limit,
@@ -950,9 +997,13 @@ async def alert_loop():
 
                             # Auto-trade only fires on the dedicated auto-trade
                             # symbol; the rest are Telegram + DB only.
-                            trade_status = None
-                            if symbol == cfg.symbol:
-                                trade_status = await _maybe_auto_execute(cfg, sub, latest)
+                            # With pair-aware whitelisting the executor
+                            # is called for every (symbol, strategy) the
+                            # worker fires on -- the executor's own
+                            # _is_pair_allowed check decides whether to
+                            # actually place an order or return a
+                            # "skipped (not whitelisted)" status.
+                            trade_status = await _maybe_auto_execute(cfg, sub, latest, symbol)
                             msg = _format_signal(symbol, name, latest)
                             if trade_status:
                                 msg = msg + "\n\n" + trade_status
