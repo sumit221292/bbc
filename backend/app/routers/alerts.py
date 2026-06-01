@@ -259,7 +259,13 @@ async def _update_auto_trade_impl(payload: AutoTradeUpdate):
     at.allowed_strategies = payload.allowed_strategies
 
     # Refuse to enable unless ALL safety conditions are met.
-    can_enable = (
+    # bool() wrap is critical: Python `and` chain returns the LAST truthy
+    # operand, not True. Without the wrap, can_enable = ['mtf_strict']
+    # (the allowed_strategies list itself), which then propagated to
+    # `at.enabled = payload.enabled and can_enable` as a list, and
+    # Pydantic v2's strict bool validator rejected it on the way back
+    # out through _auto_view. Easy to miss; easy to fix here.
+    can_enable = bool(
         at.api_key
         and at.api_secret
         and at.confirmation == CONFIRM_PHRASE
