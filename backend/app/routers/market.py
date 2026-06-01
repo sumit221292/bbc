@@ -108,6 +108,30 @@ async def market_info():
     }
 
 
+@router.get("/outbound-ip")
+async def outbound_ip():
+    """Returns Railway's current outbound public IP as seen by external
+    services. Needed so the user can whitelist it on Binance's API key
+    settings -- Binance refuses to let you enable Trading on an
+    unrestricted-IP key. Hobby-tier Railway IPs rotate, so this
+    endpoint is the only practical way to discover the current value
+    without paying for a static IP."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get("https://api.ipify.org?format=json")
+            r.raise_for_status()
+            return {"ip": r.json().get("ip", ""), "source": "api.ipify.org"}
+    except Exception as e:
+        # Fallback: try a different IP-detection service
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get("https://ifconfig.me/ip")
+                r.raise_for_status()
+                return {"ip": r.text.strip(), "source": "ifconfig.me"}
+        except Exception as e2:
+            raise HTTPException(502, f"IP detection failed: {e}; fallback: {e2}")
+
+
 @router.get("/prices")
 async def get_prices(
     symbols: str = Query("", description="Comma-separated symbol list; empty returns every USDT pair."),
