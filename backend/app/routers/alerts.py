@@ -1,7 +1,14 @@
-"""Alerts API — frontend syncs Telegram setup + subscriptions to backend."""
+"""Alerts API — frontend syncs Telegram setup + subscriptions to backend.
+
+Every endpoint here is gated by `require_auth`. The router-level
+`dependencies=[Depends(require_auth)]` argument means even routes I
+forget to annotate individually stay protected. When ADMIN_PASSWORD is
+not set (local dev) auth becomes a pass-through, so this doesn't break
+that path.
+"""
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..alerts import (
@@ -9,9 +16,14 @@ from ..alerts import (
     OpenPosition, Subscription, _is_known_strategy, load_config,
     save_config, send_telegram,
 )
+from ..auth import require_auth
 from ..binance_trade import cancel_all_open_orders, test_credentials
 
-router = APIRouter(prefix="/api/alerts", tags=["alerts"])
+router = APIRouter(
+    prefix="/api/alerts",
+    tags=["alerts"],
+    dependencies=[Depends(require_auth)],
+)
 
 
 class ConfigUpdate(BaseModel):

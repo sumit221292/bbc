@@ -17,6 +17,7 @@ from .alerts import alert_loop
 from .binance import stream_klines
 from .config import settings
 from .routers import alerts as alerts_router
+from .routers import auth as auth_router
 from .routers import market, outlook, strategy
 from .routers import trades as trades_router
 from . import trade_store
@@ -27,13 +28,20 @@ app = FastAPI(title="BTC/USDT Trading Analysis API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
+    # In production the frontend is served same-origin from this FastAPI
+    # process (static mount below), so CORS effectively never fires for
+    # real users. For local dev the Vite proxy keeps requests same-origin
+    # too. The cors_origins list only matters if someone hosts the
+    # frontend on a separate domain, in which case allow_credentials
+    # must be True for the auth cookie to round-trip -- and the origin
+    # list MUST be specific (browsers reject "*" with credentials).
     allow_origins=settings.cors_origins,
-    # No cookies/auth in this app — keep this False so wildcard origins work.
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(auth_router.router)
 app.include_router(market.router)
 app.include_router(strategy.router)
 app.include_router(outlook.router)

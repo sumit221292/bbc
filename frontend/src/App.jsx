@@ -12,7 +12,8 @@ import AlertsTab from './components/AlertsTab.jsx'
 import TradesTab from './components/TradesTab.jsx'
 import MatrixTab from './components/MatrixTab.jsx'
 import Resizer from './components/Resizer.jsx'
-import { getIndicators, getKlines, getLeaderboard, getMarketInfo, getOutlook, getStrategies, getStrategySnapshot, runStrategy } from './api.js'
+import { getAuthStatus, getIndicators, getKlines, getLeaderboard, getMarketInfo, getOutlook, getStrategies, getStrategySnapshot, logout, runStrategy } from './api.js'
+import LoginScreen from './components/LoginScreen.jsx'
 import { useLiveKlines } from './hooks/useLiveKlines.js'
 import { usePersistedState } from './hooks/usePersistedState.js'
 
@@ -27,6 +28,12 @@ export default function App() {
   // Backend's market mode (spot / futures) so the header can advertise
   // which price feed the user is looking at. Fetched once on mount.
   const [marketInfo, setMarketInfo] = useState(null)
+  // Auth gate. authChecked=false during the initial /api/auth/status
+  // round-trip; we render a thin shell rather than the login screen
+  // immediately to avoid a flash when the user is already logged in.
+  const [authChecked, setAuthChecked] = useState(false)
+  const [authed, setAuthed] = useState(false)
+  const [authDisabled, setAuthDisabled] = useState(false)
   const [strategyId, setStrategyId] = usePersistedState('btc.strategy', 'mtf_chop_aware')
   const [strategyResult, setStrategyResult] = useState(null)
   const [outlook, setOutlook] = useState(null)
@@ -48,10 +55,34 @@ export default function App() {
   const [drawMode, setDrawMode] = useState('none')
   const [error, setError] = useState(null)
 
-  // Strategy list — fetched once.
+  // Auth status — fetched once on mount, also re-fetched whenever the
+  // user logs in via the LoginScreen below. Other fetch effects gate
+  // on `authed` so we don't blast 401s before the user has logged in.
   useEffect(() => {
-    getStrategies().then(setStrategies).catch(e => setError(String(e)))
+    getAuthStatus()
+      .then(s => {
+        setAuthed(!!s.authenticated)
+        setAuthDisabled(!!s.auth_disabled)
+        setAuthChecked(true)
+      })
+      .catch(() => {
+        // Backend unreachable -- treat as unauthenticated so the user
+        // sees the login screen rather than a blank app.
+        setAuthed(false)
+        setAuthChecked(true)
+      })
   }, [])
+
+  const handleLogout = useCallback(async () => {
+    try { await logout() } catch { /* ignore network error */ }
+    setAuthed(false)
+  }, [])
+
+  // Strategy list — fetched once after auth clears.
+  useEffect(() => {
+    if (!authed) return
+    getStrategies().then(setStrategies).catch(e => setError(String(e)))
+  }, [authed])
 
   // Market mode (spot / futures) — fetched once. Tells the user via a
   // header badge whether prices come from Binance Spot or USDT-M Futures
@@ -247,6 +278,15 @@ export default function App() {
     { id: 'alerts', icon: '🔔', label: 'Alerts' },
   ]
 
+  // Auth gates -- render nothing while we wait for /api/auth/status,
+  // then show the login screen if the backend says we're unauthenticated.
+  if (!authChecked) {
+    return <div className="app" />  // empty shell to avoid pre-auth flicker
+  }
+  if (!authed) {
+    return <LoginScreen onSuccess={() => setAuthed(true)} />
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -268,6 +308,11 @@ export default function App() {
           <div className="live-price">
             {livePrice ? `$${fmtPrice(livePrice)}` : '—'}
           </div>
+          {!authDisabled && (
+            <button className="logout-btn" onClick={handleLogout} title="Sign out">
+              ↪ Logout
+            </button>
+          )}
         </div>
       </header>
 

@@ -44,8 +44,12 @@ export async function getLeaderboard(symbol = 'BTCUSDT') {
   return r.json()
 }
 
+// All alert/auto-trade endpoints sit behind require_auth on the
+// backend. credentials:'include' makes the browser send the session
+// cookie so the protected routes accept the request.
+
 export async function getAlertsConfig() {
-  const r = await fetch(`${BASE}/api/alerts/config`)
+  const r = await fetch(`${BASE}/api/alerts/config`, { credentials: 'include' })
   if (!r.ok) throw new Error(`alerts/config: ${r.status}`)
   return r.json()
 }
@@ -54,6 +58,7 @@ export async function setAlertsConfig(payload) {
   const r = await fetch(`${BASE}/api/alerts/config`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify(payload),
   })
   if (!r.ok) throw new Error(`alerts/config: ${r.status}`)
@@ -64,6 +69,7 @@ export async function sendBackendTest({ token, chat_id, chat_ids = [] }) {
   const r = await fetch(`${BASE}/api/alerts/test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ token, chat_id, chat_ids }),
   })
   const data = await r.json().catch(() => ({}))
@@ -75,6 +81,7 @@ export async function setAutoTrade(payload) {
   const r = await fetch(`${BASE}/api/alerts/auto`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify(payload),
   })
   const data = await r.json().catch(() => ({}))
@@ -86,14 +93,33 @@ export async function testBinanceCredentials({ api_key, api_secret }) {
   const r = await fetch(`${BASE}/api/alerts/auto/test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ api_key, api_secret }),
   })
   return r.json().catch(() => ({ ok: false, message: 'parse error' }))
 }
 
 export async function killAutoTrade() {
-  const r = await fetch(`${BASE}/api/alerts/auto/kill`, { method: 'POST' })
+  const r = await fetch(`${BASE}/api/alerts/auto/kill`, {
+    method: 'POST',
+    credentials: 'include',
+  })
   return r.json().catch(() => ({ ok: false }))
+}
+
+// --- Auth helpers ---
+
+export async function getAuthStatus() {
+  const r = await fetch(`${BASE}/api/auth/status`, { credentials: 'include' })
+  if (!r.ok) throw new Error(`auth/status: ${r.status}`)
+  return r.json()  // { authenticated: bool, auth_disabled: bool }
+}
+
+export async function logout() {
+  await fetch(`${BASE}/api/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  })
 }
 
 export async function getTrades({ strategy, interval, symbol, limit = 200 } = {}) {
