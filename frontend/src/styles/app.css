@@ -1089,6 +1089,54 @@ body {
 .m-lb-pnl.pos { color: var(--buy); }
 .m-lb-pnl.neg { color: var(--sell); }
 
+.auto-live-config {
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  margin-top: 6px;
+}
+.auto-live-config .alc-title {
+  font-size: 11px; font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+.auto-live-config .alc-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.auto-live-config .alc-row {
+  display: flex; align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(255,255,255,0.06);
+  font-size: 11px;
+}
+.auto-live-config .alc-row:last-child { border-bottom: none; }
+.auto-live-config .alc-key {
+  flex: 0 0 130px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.auto-live-config .alc-val {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+.auto-live-config .alc-val.pos { color: var(--buy); font-weight: 600; }
+.auto-live-config .alc-val.neg { color: var(--sell); font-weight: 600; }
+.auto-live-config .alc-hint {
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: rgba(52,152,219,0.08);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
 .auto-symbol {
   padding: 8px 10px;
   background: var(--panel-2);

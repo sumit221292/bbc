@@ -86,6 +86,13 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
   const phraseMatches = confirmation === CONFIRM_PHRASE
   const pos = at?.current_position
 
+  // Resolve allowed strategy IDs to human names for the live-config
+  // summary -- the form list below uses IDs but the read-only summary
+  // should show the same labels the rest of the app uses.
+  const strategyNameMap = Object.fromEntries((strategies || []).map(s => [s.id, s.name]))
+  const allowedNames = (at?.allowed_strategies || [])
+    .map(id => strategyNameMap[id] || id)
+
   return (
     <div className="auto-trade">
       <div className={`auto-banner ${isLive ? 'live' : 'idle'}`}>
@@ -94,6 +101,88 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
           : <>⚙️ Auto-trade idle. Enable below ONLY after paper-trading and reading the warnings.</>
         }
       </div>
+
+      {/* Server-side live configuration summary. Reflects what's actually
+          saved on the backend, NOT the form-state below (which is what
+          the user is about to change to). This is the panel the user
+          wanted to see "what setup is live right now". */}
+      {at && (
+        <div className="auto-live-config">
+          <div className="alc-title">📋 Current Live Configuration</div>
+          <div className="alc-grid">
+            <div className="alc-row">
+              <span className="alc-key">State</span>
+              <span className={`alc-val ${isLive ? 'pos' : 'muted'}`}>
+                {isLive ? '🟢 LIVE' : '⚪ IDLE'}
+              </span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">Target coin</span>
+              <span className="alc-val">
+                <b>{serverState?.symbol || '—'}</b>
+              </span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">Allowed strategies</span>
+              <span className="alc-val">
+                {allowedNames.length > 0
+                  ? allowedNames.join(', ')
+                  : <span className="muted">none (will block all fires)</span>}
+              </span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">Capital</span>
+              <span className="alc-val">${at.capital_usd.toFixed(2)}</span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">Risk / trade</span>
+              <span className="alc-val">{(at.risk_pct * 100).toFixed(2)}%</span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">Max position</span>
+              <span className="alc-val">${at.max_position_usd.toFixed(2)}</span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">Daily trade cap</span>
+              <span className="alc-val">
+                {at.trades_today}/{at.max_trades_per_day}
+              </span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">Daily loss cap</span>
+              <span className="alc-val">
+                {(at.loss_today_pct * 100).toFixed(2)}% /{' '}
+                {(at.max_daily_loss_pct * 100).toFixed(2)}%
+              </span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">API key</span>
+              <span className={`alc-val ${at.has_api_key ? 'pos' : 'neg'}`}>
+                {at.has_api_key ? '✓ stored' : '✗ missing'}
+              </span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">API secret</span>
+              <span className={`alc-val ${at.has_api_secret ? 'pos' : 'neg'}`}>
+                {at.has_api_secret ? '✓ stored' : '✗ missing'}
+              </span>
+            </div>
+            <div className="alc-row">
+              <span className="alc-key">Confirmation</span>
+              <span className={`alc-val ${at.has_confirmation ? 'pos' : 'neg'}`}>
+                {at.has_confirmation ? '✓ valid' : '✗ not set'}
+              </span>
+            </div>
+          </div>
+          {!isLive && at.has_api_key && at.has_api_secret && allowedNames.length > 0 && !at.has_confirmation && (
+            <div className="alc-hint muted small">
+              💡 Everything else is set — type the confirmation phrase in
+              the form below and toggle <b>"I want to enable auto-trade"</b>
+              to go live.
+            </div>
+          )}
+        </div>
+      )}
 
       {pos && (
         <div className="position-card">
