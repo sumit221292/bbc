@@ -111,8 +111,10 @@ export async function getTrades({ strategy, interval, symbol, limit = 200 } = {}
 // also removed so trade history cannot be wiped over HTTP. Use the
 // Railway volume directly if a manual reset is ever required.
 
-export async function getTradeStatsByPair() {
-  const r = await fetch(`${BASE}/api/trades/stats-by-pair`)
+// window: '7d' / '15d' / '30d' / 'all' (default). The Matrix tab uses
+// this to flip between weekly / 15-day / monthly / all-time views.
+export async function getTradeStatsByPair({ window = 'all' } = {}) {
+  const r = await fetch(`${BASE}/api/trades/stats-by-pair?window=${encodeURIComponent(window)}`)
   if (!r.ok) throw new Error(`stats-by-pair: ${r.status}`)
   return r.json()
 }

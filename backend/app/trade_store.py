@@ -500,13 +500,20 @@ def per_strategy_stats() -> list[dict[str, Any]]:
     return out
 
 
-def per_pair_stats() -> list[dict[str, Any]]:
+def per_pair_stats(since_ts: int | None = None) -> list[dict[str, Any]]:
     """Roll-up grouped by (strategy_id, symbol). Drives the per-coin chip
-    stats under each subscribed strategy in the AlertsTab — user can see
-    at a glance which (strategy, coin) combos have edge before excluding."""
+    stats under each subscribed strategy in the AlertsTab and the Matrix
+    tab's heatmap.
+
+    Optional since_ts filters to trades whose signal_time >= since_ts so
+    the same query backs "last 7 days", "last 15 days", "last 30 days"
+    and "all time" views without duplicate code. Passing None (default)
+    preserves the original all-time behaviour for existing callers."""
+    where_sql = "WHERE signal_time >= ?" if since_ts is not None else ""
+    params: tuple = (int(since_ts),) if since_ts is not None else ()
     with _lock, _connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT strategy_id, symbol,
                    COUNT(*) AS total,
                    SUM(CASE WHEN status = 'WIN'  THEN 1 ELSE 0 END) AS wins,
@@ -516,9 +523,11 @@ def per_pair_stats() -> list[dict[str, Any]]:
                             THEN pnl_pct ELSE 0 END) AS total_pnl_pct,
                    MAX(signal_time) AS last_signal_time
               FROM trades
+              {where_sql}
           GROUP BY strategy_id, symbol
           ORDER BY strategy_id, symbol
-            """
+            """,
+            params,
         ).fetchall()
     out = []
     for r in rows:

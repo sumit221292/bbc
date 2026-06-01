@@ -31,11 +31,23 @@ async def all_stats():
 
 
 @router.get("/stats-by-pair")
-async def stats_by_pair():
+async def stats_by_pair(
+    window: str = Query("all", description="Time window: '7d', '15d', '30d', or 'all'."),
+):
     """Per-(strategy, symbol) summary. Lets the AlertsTab show inline
-    win-rate + PnL under each coin chip so the user can data-drive
-    their per-coin exclusions instead of guessing."""
-    return {"pairs": trade_store.per_pair_stats()}
+    win-rate + PnL under each coin chip and the Matrix tab show a
+    time-windowed heatmap so the user can see which (strategy, coin)
+    pairs are winning right now vs all-time."""
+    import time as _t
+    since = None
+    if window in ("7d", "15d", "30d"):
+        days = int(window.rstrip("d"))
+        since = int(_t.time()) - days * 86400
+    return {
+        "pairs": trade_store.per_pair_stats(since),
+        "window": window,
+        "since_ts": since,
+    }
 
 
 # NOTE: a DELETE /api/trades endpoint used to live here but was removed

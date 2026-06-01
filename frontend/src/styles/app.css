@@ -932,6 +932,54 @@ body {
   cursor: default;
 }
 
+.matrix-champions {
+  background: linear-gradient(135deg, rgba(243,156,18,0.12), rgba(38,166,154,0.08));
+  border: 1px solid rgba(243,156,18,0.4);
+  border-radius: 6px;
+  padding: 10px;
+}
+.mc-title {
+  font-size: 12px; font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.mc-row {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.mc-card {
+  flex: 0 0 auto;
+  min-width: 110px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.1s;
+}
+.mc-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.mc-card.mc-gold {
+  background: linear-gradient(180deg, rgba(255,215,0,0.15), var(--bg));
+  border-color: rgba(255,215,0,0.7);
+}
+.mc-card.mc-silver {
+  background: linear-gradient(180deg, rgba(192,192,192,0.15), var(--bg));
+  border-color: rgba(192,192,192,0.6);
+}
+.mc-card.mc-bronze {
+  background: linear-gradient(180deg, rgba(205,127,50,0.15), var(--bg));
+  border-color: rgba(205,127,50,0.6);
+}
+.mc-medal { font-size: 18px; line-height: 1; margin-bottom: 4px; }
+.mc-coin { font-size: 13px; font-weight: 700; color: var(--text); }
+.mc-strat {
+  font-size: 9px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 110px;
+}
+.mc-pnl { font-size: 13px; font-weight: 700; margin-top: 2px; }
+.mc-meta { font-size: 9px; margin-top: 1px; }
+
 .matrix-leaderboards {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
   margin-top: 8px;

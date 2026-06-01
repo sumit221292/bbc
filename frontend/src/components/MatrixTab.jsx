@@ -17,13 +17,19 @@ function MatrixTab({ strategies = [], onJumpToLive }) {
   const [minTrades, setMinTrades] = useState(3)
   // 'all' / 'profitable' / 'loss' -- narrow the cells to a focus area.
   const [filter, setFilter] = useState('all')
+  // Time window for the heatmap + leaderboards + champions banner:
+  //   '7d'   -> weekly winners (this week)
+  //   '15d'  -> bi-weekly winners
+  //   '30d'  -> monthly winners
+  //   'all'  -> all-time (default)
+  const [window, setWindow] = useState('all')
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     const fetchOnce = async () => {
       try {
-        const d = await getTradeStatsByPair()
+        const d = await getTradeStatsByPair({ window })
         if (!cancelled) {
           setPairs(d.pairs || [])
           setLoading(false)
@@ -35,7 +41,7 @@ function MatrixTab({ strategies = [], onJumpToLive }) {
     fetchOnce()
     const id = setInterval(fetchOnce, 30000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [])
+  }, [window])
 
   // Map strategy_id -> friendly name for the row headers.
   const nameById = useMemo(() => {
@@ -101,6 +107,35 @@ function MatrixTab({ strategies = [], onJumpToLive }) {
     }
   }, [pairs, minTrades])
 
+  // "Champions per coin" -- for each coin, the strategy with the
+  // highest PnL on that coin within the active window. Surfaces the
+  // user's real ask: "kis coin pe konsi strategy sabse best chal rahi
+  // hai". Pre-sorted by champion PnL descending so the biggest wins
+  // float to the top of the banner.
+  const championPerCoin = useMemo(() => {
+    const byCoin = new Map()  // symbol -> best stat row so far
+    for (const p of pairs) {
+      if (p.closed < minTrades) continue
+      const cur = byCoin.get(p.symbol)
+      if (!cur || p.total_pnl_pct > cur.total_pnl_pct) {
+        byCoin.set(p.symbol, p)
+      }
+    }
+    return Array.from(byCoin.values())
+      .filter(p => p.total_pnl_pct > 0)  // only celebrate actual winners
+      .sort((a, b) => b.total_pnl_pct - a.total_pnl_pct)
+  }, [pairs, minTrades])
+
+  // Human-readable label for the active window -- used in titles
+  // throughout the panel so the user always knows what slice they're
+  // looking at.
+  const windowLabel = {
+    '7d': 'This Week (last 7 days)',
+    '15d': 'Bi-weekly (last 15 days)',
+    '30d': 'This Month (last 30 days)',
+    'all': 'All Time',
+  }[window] || 'All Time'
+
   if (loading) {
     return (
       <div className="matrix-tab">
@@ -124,9 +159,18 @@ function MatrixTab({ strategies = [], onJumpToLive }) {
 
   return (
     <div className="matrix-tab">
-      <div className="panel-section-title">📐 Strategy × Coin Matrix</div>
+      <div className="panel-section-title">📐 Strategy × Coin Matrix — {windowLabel}</div>
 
       <div className="matrix-filters">
+        <label>
+          <span className="muted small">Window</span>
+          <select value={window} onChange={e => setWindow(e.target.value)}>
+            <option value="7d">📅 This Week (7d)</option>
+            <option value="15d">📆 Bi-weekly (15d)</option>
+            <option value="30d">🗓 This Month (30d)</option>
+            <option value="all">⏳ All Time</option>
+          </select>
+        </label>
         <label>
           <span className="muted small">Min trades</span>
           <select value={minTrades} onChange={e => setMinTrades(Number(e.target.value))}>
@@ -149,6 +193,46 @@ function MatrixTab({ strategies = [], onJumpToLive }) {
           {hiddenCount > 0 && ` · ${hiddenCount} hidden by filter`}
         </div>
       </div>
+
+      {championPerCoin.length > 0 && (
+        <div className="matrix-champions">
+          <div className="mc-title">
+            🏆 Champion per coin — {windowLabel}
+            <span className="muted small">
+              {' '}(best strategy on each coin, sorted by PnL)
+            </span>
+          </div>
+          <div className="mc-row">
+            {championPerCoin.slice(0, 12).map((p, i) => {
+              const coin = p.symbol.replace(/USDT$/, '')
+              const stratLabel = (nameById[p.strategy_id] || p.strategy_id)
+                .replace(/^[^\w]+\s*/, '')
+                .slice(0, 16)
+              return (
+                <div
+                  key={`${p.strategy_id}-${p.symbol}`}
+                  className={`mc-card ${i === 0 ? 'mc-gold' : i === 1 ? 'mc-silver' : i === 2 ? 'mc-bronze' : ''}`}
+                  onClick={() => onJumpToLive && onJumpToLive(p.strategy_id, p.symbol, '1h')}
+                  title={`${nameById[p.strategy_id] || p.strategy_id} on ${p.symbol}\n` +
+                         `${p.closed} closed (${p.wins}W/${p.losses}L), ${p.win_rate.toFixed(1)}% WR\n` +
+                         `Cumulative PnL +${p.total_pnl_pct.toFixed(2)}%\n` +
+                         `Click to open in Live`}
+                >
+                  <div className="mc-medal">
+                    {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
+                  </div>
+                  <div className="mc-coin">{coin}</div>
+                  <div className="mc-strat muted">{stratLabel}</div>
+                  <div className="mc-pnl pos">+{p.total_pnl_pct.toFixed(2)}%</div>
+                  <div className="mc-meta muted small">
+                    {p.closed}t · {p.win_rate.toFixed(0)}% WR
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="matrix-scroll">
         <table className="matrix-table">
