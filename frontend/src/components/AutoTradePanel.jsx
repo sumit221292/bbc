@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
 import { killAutoTrade, setAutoTrade, testBinanceCredentials } from '../api.js'
+import SymbolPicker from './SymbolPicker.jsx'
 
 const CONFIRM_PHRASE = 'I UNDERSTAND THE RISKS'
 
@@ -18,6 +19,11 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
   const [confirmation, setConfirmation] = useState('')
   const [allowed, setAllowed] = useState(at?.allowed_strategies ?? [])
   const [enabled, setEnabled] = useState(at?.enabled ?? false)
+  // Auto-trade target coin. Defaults to whatever cfg.symbol currently is
+  // on the server (BTCUSDT out of the box). User picks via SymbolPicker;
+  // the backend will auto-add the coin to the watchlist too so signals
+  // actually fire on it.
+  const [symbol, setSymbol] = useState(serverState?.symbol ?? 'BTCUSDT')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
 
@@ -54,6 +60,7 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
         max_daily_loss_pct: Number(maxLoss),
         confirmation,
         allowed_strategies: allowed,
+        symbol: symbol || '',
       })
       setApiKey('')         // never keep secrets in component state after save
       setApiSecret('')
@@ -180,6 +187,25 @@ function AutoTradePanel({ strategies, serverState, onConfigChange }) {
             <input type="number" value={maxLoss} onChange={e => setMaxLoss(e.target.value)}
                    step="0.005" min="0.01" max="0.20" />
           </label>
+        </div>
+
+        <div className="auto-symbol">
+          <div className="title">Auto-trade target coin (orders fire here only)</div>
+          <div className="auto-symbol-current">
+            Current: <b>{symbol || '—'}</b>
+          </div>
+          <SymbolPicker
+            value=""
+            placeholder={`Change target (current: ${symbol || 'none'})`}
+            size="compact"
+            onChange={sym => sym && setSymbol(sym)}
+          />
+          <div className="muted small" style={{ marginTop: 4, lineHeight: 1.4 }}>
+            Whichever coin you pick here is automatically added to the
+            watchlist so signals fire on it. Only ONE coin can be the
+            auto-trade target at a time (Spot account holds a single
+            position).
+          </div>
         </div>
 
         <div className="auto-strategies">

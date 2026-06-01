@@ -215,6 +215,11 @@ class AutoTradeUpdate(BaseModel):
     max_daily_loss_pct: float = 0.05
     confirmation: str = ""        # user must type CONFIRM_PHRASE to enable
     allowed_strategies: list[str] = []
+    # Auto-trade target symbol. Empty = keep whatever's currently set
+    # in cfg. Setting it routes orders + worker auto-execute to this
+    # coin and also injects it into the watchlist so the worker
+    # actually evaluates signals on it.
+    symbol: str = ""
 
 
 @router.post("/auto", response_model=AutoTradeView)
@@ -257,6 +262,18 @@ async def _update_auto_trade_impl(payload: AutoTradeUpdate):
     at.max_daily_loss_pct = max(0.01, min(payload.max_daily_loss_pct, 0.20))
     at.confirmation = payload.confirmation
     at.allowed_strategies = payload.allowed_strategies
+
+    # Auto-trade target symbol. Empty payload value means "keep current"
+    # so the form doesn't have to round-trip the existing symbol every
+    # time. When set, also inject into the watchlist (cfg.symbols) --
+    # otherwise the alert worker won't even evaluate signals on this
+    # coin, and there'd be nothing for the auto-trader to act on.
+    if payload.symbol:
+        new_symbol = payload.symbol.strip().upper()
+        if new_symbol:
+            cfg.symbol = new_symbol
+            if new_symbol not in cfg.symbols:
+                cfg.symbols = [*cfg.symbols, new_symbol]
 
     # Refuse to enable unless ALL safety conditions are met.
     # bool() wrap is critical: Python `and` chain returns the LAST truthy
