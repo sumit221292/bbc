@@ -6,10 +6,13 @@ forget to annotate individually stay protected. When ADMIN_PASSWORD is
 not set (local dev) auth becomes a pass-through, so this doesn't break
 that path.
 """
+import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+log = logging.getLogger("btc.alerts.router")
 
 from ..alerts import (
     AlertConfig, AutoTradeConfig, CONFIRM_PHRASE, MAX_RISK_PCT,
@@ -216,7 +219,25 @@ class AutoTradeUpdate(BaseModel):
 
 @router.post("/auto", response_model=AutoTradeView)
 async def update_auto_trade(payload: AutoTradeUpdate):
-    """Update auto-trade settings. Many guardrails enforced here."""
+    """Update auto-trade settings. Many guardrails enforced here.
+
+    Wrapped in a try/except that surfaces the real exception both to
+    Railway logs (via log.exception) AND to the HTTP response (via
+    HTTPException 500 with detail). Without this the user just sees
+    "HTTP 500" with no way to diagnose -- the prior 500 was the
+    user not being able to figure out which validation failed."""
+    try:
+        return await _update_auto_trade_impl(payload)
+    except HTTPException:
+        # Re-raise FastAPI HTTP errors untouched (they already carry
+        # a meaningful detail like the 400 enable-validation message).
+        raise
+    except Exception as e:
+        log.exception("[auto-trade save] crashed on payload=%s", payload.model_dump(exclude={'api_key','api_secret'}))
+        raise HTTPException(500, f"Auto-trade save failed: {type(e).__name__}: {e}")
+
+
+async def _update_auto_trade_impl(payload: AutoTradeUpdate):
     cfg = await load_config()
     at = cfg.auto_trade
 
