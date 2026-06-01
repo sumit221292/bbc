@@ -46,7 +46,10 @@ function TradesTab({ strategies = [], onJumpToLive }) {
         const d = await getTrades({
           strategy: strategyFilter || undefined,
           symbol: coinFilter || undefined,
-          limit: 500,
+          // Backend's hard cap is 2000 -- pull as much as it'll give us
+          // so the visible list matches the headline summary. Older
+          // trades weren't being deleted, just paginated off-screen.
+          limit: 2000,
         })
         if (!cancelled) {
           setData(d)
